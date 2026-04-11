@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "agent-memory": {
+      "command": "python3",
+      "args": [
+        "/absolute/path/to/agent-memory-svc/agent_memory_mcp.py"
+      ],
+      "env": {
+        "AGENT_MEMORY_URL": "http://memory-host.tailnet.ts.net:8787",
+        "AGENT_MEMORY_SHARED_KEY": "set-if-you-configured-one"
+      }
+    }
+  }
+}

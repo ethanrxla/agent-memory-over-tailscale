@@ -1,0 +1,12 @@
+services:
+  agent-memory:
+    build: .
+    container_name: agent-memory
+    environment:
+      AGENT_MEMORY_DB_PATH: /data/agent_memory.db
+      AGENT_MEMORY_SHARED_KEY: ${AGENT_MEMORY_SHARED_KEY:-}
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
