@@ -1,6 +1,6 @@
-# Memory Agents MCP
+# Agent Memory Over Tailscale
 
-`memory-agents-mcp` is a local-first shared memory backend plus MCP wrapper for multi-agent work.
+`agent-memory-over-tailscale` is a local-first shared memory backend plus MCP wrapper for multi-agent work.
 
 It is meant for setups where multiple Claude or Codex instances are running independently across:
 
@@ -47,7 +47,7 @@ This gives you one shared memory database across all devices and repos while kee
 Run the backend on the device you want to act as the memory hub:
 
 ```bash
-cd memory-agents-mcp
+cd agent-memory-over-tailscale
 docker compose up -d --build
 ```
 
