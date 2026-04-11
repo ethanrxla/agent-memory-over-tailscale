@@ -39,6 +39,8 @@ This gives you one shared memory database across all devices and repos while kee
 - `main.py`: FastAPI memory service
 - `agent_memory_mcp.py`: MCP wrapper
 - `agent_memory_cli.py`: CLI helper
+- `scripts/install.sh`: small installer/config generator
+- `scripts/generate_client_configs.py`: per-device config renderer
 - `SKILLS.md`: operating rules for AI agents
 - `mcp-config.example.json`: example MCP client config
 
@@ -94,6 +96,23 @@ python3 agent_memory_cli.py search \
 
 Use [mcp-config.example.json](mcp-config.example.json) as the template for your AI client.
 
+To generate device-specific ready-to-paste configs:
+
+```bash
+./scripts/install.sh \
+  --backend-url http://memory-host.tailnet.ts.net:8787 \
+  --shared-key your-shared-key \
+  --device laptop \
+  --device desktop
+```
+
+This writes per-device output under `generated/`, including:
+
+- `claude-desktop.json`
+- `codex-config.toml`
+- `codex-mcp-add.sh`
+- `instructions.txt`
+
 Important design point:
 
 - the MCP wrapper runs locally on each device
@@ -106,8 +125,20 @@ That means four independent agents in two different repos can all talk to the sa
 Using an existing Python environment with `pytest` available:
 
 ```bash
-PYTHONPATH=. python -m pytest -q tests/test_service.py tests/test_mcp_server.py
+PYTHONPATH=. python -m pytest -q tests/test_service.py tests/test_mcp_server.py tests/test_dashboard_and_configs.py
 ```
+
+## Dashboard
+
+The service exposes a built-in dashboard at `/` and JSON dashboard data at `/dashboard/data`.
+
+It shows:
+
+- agent and entry counts
+- recent agents
+- recent entries
+- namespace distribution
+- shared-memory search results
 
 ## Security Notes
 
