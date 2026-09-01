@@ -29,9 +29,10 @@ fi
 
 if [[ "${BACKFILL:-0}" == "1" ]]; then
   echo "Backfilling existing transcripts into $BACKEND_URL ..."
-  AGENT_MEMORY_URL="$BACKEND_URL" AGENT_MEMORY_SHARED_KEY="$SHARED_KEY" \
-    python3 -m watcher.daemon --backend-url "$BACKEND_URL" --shared-key "$SHARED_KEY" \
-      --agent-id "$AGENT_ID" --deny "$DENY" --backfill
+  # `python3 -m watcher.daemon` needs the repo root on the module path.
+  ( cd "$ROOT_DIR" && AGENT_MEMORY_URL="$BACKEND_URL" AGENT_MEMORY_SHARED_KEY="$SHARED_KEY" \
+      python3 -m watcher.daemon --backend-url "$BACKEND_URL" --shared-key "$SHARED_KEY" \
+        --agent-id "$AGENT_ID" --deny "$DENY" --backfill )
 fi
 
 UNIT_DIR="$HOME/.config/systemd/user"
