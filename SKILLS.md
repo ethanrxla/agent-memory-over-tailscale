@@ -1,134 +1,66 @@
-# Shared Agent Memory Skill
+# Shared Agent Memory — Operating Guide
 
-Use this service as a shared memory layer between Claude/Codex instances on your Tailscale network.
+This is the operator/reference guide. The **installable agent skill** lives at
+[`skill/agent-memory/SKILL.md`](skill/agent-memory/SKILL.md); install it to
+`~/.claude/skills/agent-memory/` (or point your client's skills dir at it) so
+agents load it automatically.
 
-## Rules
+## Model of operation
 
-1. Register yourself once per device/session before publishing data.
-2. Search before asking another agent to redo work.
-3. Publish durable facts, not chatty thought streams.
-4. Send direct messages only for handoffs or questions that need a specific recipient.
-5. Do not store API keys, passwords, bearer tokens, or raw secrets.
+- One **hub** runs on an always-on Tailscale node and owns the SQLite database.
+- A **watcher** runs on each device, tailing Claude Code and Codex transcripts,
+  redacting secrets locally, and shipping compact session events to the hub.
+- A **background worker** on the hub embeds new content and summarises sessions
+  (via free NVIDIA NIM, with extractive fallback).
+- Agents talk to the hub through the **MCP wrapper** (local per device) or the
+  **CLI**.
 
-## What To Store
+## The workflow an agent should follow
 
-- File paths, commands, diffs, artifact locations, hashes, URLs, ports, and precise observations.
-- Short summaries of failures, fixes, environment mismatches, and repro steps.
-- Structured handoff notes between agents working on the same namespace.
+1. **Brief once at session start**, scoped to the current project:
+   ```bash
+   python3 agent_memory_cli.py brief --cwd "$(pwd)"
+   ```
+2. **Search on demand**, scoped to the current project:
+   ```bash
+   python3 agent_memory_cli.py search --query "shannon runtime model" --cwd "$(pwd)"
+   ```
+3. **Record decisions** that future work must respect:
+   ```bash
+   python3 agent_memory_cli.py decision --agent-id codex-laptop --cwd "$(pwd)" \
+     --title "..." --content "..." --rationale "..."
+   ```
+4. **Publish durable facts** (paths, hashes, ports, repro steps) with
+   `publish_memory` / `agent_memory_cli.py publish`.
+5. **Hand off** with `send_message` and read `read_inbox`.
 
-## What Not To Store
+Routine activity is captured automatically by the watcher, so reserve explicit
+writes for conclusions and decisions.
 
-- Hidden chain-of-thought.
-- Large copied source files when a path and summary is enough.
-- Secrets or private credentials.
+## Scoping
 
-## Namespaces
+Every memory has a `project_key` derived from the git remote (or path) of its
+`cwd`. Search/brief are project-scoped by default. Use `--scope linked` (after
+linking projects via `POST /v1/projects/link`) or `--scope global` to widen.
+A tunable relevance floor returns "no relevant context" instead of weak matches.
 
-Use one namespace per project or engagement, for example:
+## What not to store
 
-- `chimera`
-- `juice-shop`
-- `scholarcal`
+- Secrets, API keys, tokens, credentials (redacted on-device, but don't rely on
+  it).
+- Hidden chain-of-thought (thinking blocks are dropped at ingest).
+- Large source files when a path plus a summary will do.
 
-## Standard Workflow
+## MCP tools
 
-### 1. Register
+Session/RAG: `get_project_brief`, `search_memory`, `list_sessions`,
+`get_session`, `record_decision`, `open_threads`.
+Original: `register_agent`, `list_agents`, `publish_memory`, `get_entry`,
+`send_message`, `read_inbox`.
+Resources: `memory://skills`, `memory://service-info`.
 
-```bash
-export AGENT_MEMORY_URL="http://<tailscale-hostname-or-ip>:8787"
-export AGENT_MEMORY_SHARED_KEY="<shared-key-if-configured>"
+## Tailscale
 
-python3 agent_memory_cli.py register \
-  --agent-id codex-laptop \
-  --display-name "Codex on laptop" \
-  --device-name laptop \
-  --tailscale-name laptop.tailnet.ts.net \
-  --capability python \
-  --capability review
-```
-
-### 2. Search First
-
-```bash
-python3 agent_memory_cli.py search \
-  --query "shannon container model runtime" \
-  --namespace chimera \
-  --requester-agent-id codex-laptop
-```
-
-### 3. Publish Durable Context
-
-```bash
-python3 agent_memory_cli.py publish \
-  --agent-id codex-laptop \
-  --namespace chimera \
-  --source-id shannon-runtime-2026-04-11 \
-  --kind artifact \
-  --title "Working Shannon runtime is baked Anthropic-only container" \
-  --tag shannon \
-  --tag runtime \
-  --content "Image sha256:... uses SHANNON_MODEL=claude-sonnet-4-6 and does not bind-mount current source."
-```
-
-### 4. Send A Handoff
-
-```bash
-python3 agent_memory_cli.py send \
-  --sender-agent-id codex-laptop \
-  --recipient-id claude-desktop \
-  --namespace chimera \
-  --title "Need parity check on second machine" \
-  --content "Compare the running Shannon image and env against source machine snapshot in shannon-runtime-snapshot/."
-```
-
-### 5. Read Inbox
-
-```bash
-python3 agent_memory_cli.py inbox \
-  --agent-id claude-desktop \
-  --namespace chimera
-```
-
-## Entry Style
-
-- Title: one sentence, specific.
-- Content: 3-10 lines, dense with facts.
-- Tags: 1-5 lowercase tags.
-- Source ID: stable identifier if the note may be updated later.
-
-## Retrieval Guidance
-
-- Search with concrete nouns first: tool names, run IDs, ports, filenames, domains.
-- Narrow by namespace whenever possible.
-- Use `artifact` for environment snapshots, logs, and paths.
-- Use `note` for conclusions.
-- Use `message` for direct handoffs.
-
-## Tailscale Guidance
-
-- Run the service on one node that other devices can reach over Tailscale.
-- Point `AGENT_MEMORY_URL` at the node's Tailscale DNS name or IP.
-- Keep the service behind Tailscale and set `AGENT_MEMORY_SHARED_KEY` if you want an extra application-layer gate.
-
-## MCP Usage
-
-If your AI client supports MCP, run the wrapper locally on each device and point it at the same Tailscale-hosted backend.
-
-Example config shape is in `mcp-config.example.json`.
-
-The wrapper exposes these tools:
-
-- `register_agent`
-- `list_agents`
-- `publish_memory`
-- `search_memory`
-- `get_entry`
-- `send_message`
-- `read_inbox`
-
-It also exposes these resources:
-
-- `memory://skills`
-- `memory://service-info`
-
-Important: the MCP server is local to each AI client, but the memory backend can be remote over Tailscale. That means every device can share one database without needing a local model or a separate local database on each machine.
+Run the hub on one node reachable over Tailscale; point `AGENT_MEMORY_URL` at
+its Tailscale DNS name. Keep it off public interfaces and set
+`AGENT_MEMORY_SHARED_KEY` for an extra gate.

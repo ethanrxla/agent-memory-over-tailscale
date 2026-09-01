@@ -1,147 +1,138 @@
 # Agent Memory Over Tailscale
 
-`agent-memory-over-tailscale` is a local-first shared memory backend plus MCP wrapper for multi-agent work.
+A shared, **session-aware RAG memory** for coding agents. It lets multiple
+Claude and Codex sessions — across multiple devices, repos, and concurrent
+tasks — share one durable memory, so an agent can pick up context in a few
+hundred tokens instead of re-reading an entire transcript, and independent
+agents can see each other's work.
 
-It is meant for setups where multiple Claude or Codex instances are running independently across:
+It solves three problems at once:
 
-- multiple devices
-- multiple terminals
-- multiple repositories
-- multiple concurrent tasks on the same project
+- **Agent memory.** Sessions are captured automatically and summarised, so a new
+  session starts from a compact brief instead of a cold context window.
+- **Relevance isolation.** Everything is scoped to a `project_key`. An agent
+  working in one repo never pulls in unrelated context from another.
+- **Persistence.** Summaries and decisions live in one SQLite database, so
+  context from weeks ago is still retrievable.
 
-The goal is simple: give those agents a shared place to publish durable facts, search prior work, and send handoff messages without relying on one agent's local context window.
+## How it works
 
-## What It Provides
+```
+pop-os (hub, always on)          per-device watcher            per-agent
+┌────────────────────────┐       ┌──────────────────┐     ┌──────────────────┐
+│ FastAPI  :8787         │◄──────│ tail *.jsonl     │     │ agent-memory     │
+│ SQLite + FTS5 + vec0   │ over  │ filter → redact  │     │   skill          │
+│  sessions / summaries  │  TS   │ spool (offline)  │     │   ↓ MCP tools    │
+│ worker: embed+summarize│       │ POST /v1/sessions│     │ get_project_brief│
+└──────────┬─────────────┘       └──────────────────┘     │ search_memory ...│
+           └── NVIDIA NIM (optional): embeddings + summaries
+```
 
-- A lightweight HTTP memory service backed by SQLite FTS5
-- Chunked note and artifact storage for retrieval-oriented lookups
-- Direct and broadcast messaging between agents
-- An MCP wrapper each AI client can run locally
-- A simple CLI for manual use and shell scripting
-- Optional shared-key auth on top of Tailscale
+- **Hub** (`main.py` / `agent_memory/`): FastAPI over SQLite. Keyword search
+  (FTS5) and semantic search (`sqlite-vec`, 2048-dim) fused with reciprocal
+  rank fusion, scoped by project, gated by a relevance floor.
+- **Watcher** (`watcher/`): runs on each device, tails Claude Code and Codex
+  transcripts, drops noise (thinking, tool output), **redacts secrets locally**,
+  and ships compact events to the hub. Spools while offline, replays on
+  reconnect.
+- **Background worker**: embeds new chunks and writes rolling + final session
+  summaries using a free NVIDIA NIM model. Everything degrades gracefully to
+  keyword-only + extractive summaries when no `NVIDIA_API_KEY` is set.
+- **Skill + MCP** (`skill/agent-memory/`, `agent_memory_mcp.py`): the tools an
+  agent calls — `get_project_brief`, `search_memory`, `record_decision`, etc.
 
-## Architecture
+## Quick start
 
-One device runs the shared backend:
-
-- `main.py` exposes the HTTP API
-- `compose.yaml` persists the SQLite database under `./data`
-
-Each AI client runs its own local MCP process:
-
-- `agent_memory_mcp.py` speaks MCP locally
-- the MCP wrapper forwards requests to the shared backend over Tailscale
-
-This gives you one shared memory database across all devices and repos while keeping MCP integration local to each client.
-
-## Main Files
-
-- `main.py`: FastAPI memory service
-- `agent_memory_mcp.py`: MCP wrapper
-- `agent_memory_cli.py`: CLI helper
-- `scripts/install.sh`: small installer/config generator
-- `scripts/generate_client_configs.py`: per-device config renderer
-- `SKILLS.md`: operating rules for AI agents
-- `mcp-config.example.json`: example MCP client config
-
-## Quick Start
-
-Run the backend on the device you want to act as the memory hub:
+Run the hub on the always-on node (e.g. `pop-os`):
 
 ```bash
-cd agent-memory-over-tailscale
 docker compose up -d --build
 ```
 
-Point other devices at it over Tailscale:
+Optionally add free NVIDIA NIM credentials for semantic search and prose
+summaries (get a key at https://build.nvidia.com — no GPU, no card):
 
 ```bash
-export AGENT_MEMORY_URL="http://memory-host.tailnet.ts.net:8787"
-export AGENT_MEMORY_SHARED_KEY="set-if-configured"
+export NVIDIA_API_KEY=nvapi-...
+docker compose up -d
 ```
 
-Register an agent:
+Install the watcher on each device:
 
 ```bash
-python3 agent_memory_cli.py register \
-  --agent-id codex-laptop \
-  --display-name "Codex Laptop" \
-  --device-name laptop \
-  --tailscale-name laptop.tailnet.ts.net
+./scripts/install_watcher.sh \
+  --backend-url http://memory-host.tailnet.ts.net:8787 \
+  --shared-key your-shared-key \
+  --backfill        # ingest transcripts already on disk, then run as a service
 ```
 
-Publish a durable note:
-
-```bash
-python3 agent_memory_cli.py publish \
-  --agent-id codex-laptop \
-  --namespace chimera \
-  --source-id shannon-runtime \
-  --kind artifact \
-  --title "Working Shannon runtime" \
-  --tag shannon \
-  --content "The working container uses claude-sonnet-4-6 and is baked into the image."
-```
-
-Search prior work:
-
-```bash
-python3 agent_memory_cli.py search \
-  --query "shannon runtime container model" \
-  --namespace chimera \
-  --requester-agent-id codex-laptop
-```
-
-## MCP Setup
-
-Use [mcp-config.example.json](mcp-config.example.json) as the template for your AI client.
-
-To generate device-specific ready-to-paste configs:
+Generate MCP client configs:
 
 ```bash
 ./scripts/install.sh \
   --backend-url http://memory-host.tailnet.ts.net:8787 \
   --shared-key your-shared-key \
-  --device laptop \
-  --device desktop
+  --device laptop --device desktop
 ```
 
-This writes per-device output under `generated/`, including:
+## Using it from an agent
 
-- `claude-desktop.json`
-- `codex-config.toml`
-- `codex-mcp-add.sh`
-- `instructions.txt`
+At session start:
 
-Important design point:
+```bash
+python3 agent_memory_cli.py brief --cwd "$(pwd)"
+```
 
-- the MCP wrapper runs locally on each device
-- the shared memory backend can live on one Tailscale-reachable node
+Search prior work, scoped to the current project:
 
-That means four independent agents in two different repos can all talk to the same memory store without sharing one terminal session or one git repo.
+```bash
+python3 agent_memory_cli.py search --query "why did we drop the shannon runtime" --cwd "$(pwd)"
+```
+
+Pin a decision:
+
+```bash
+python3 agent_memory_cli.py decision --agent-id codex-laptop --cwd "$(pwd)" \
+  --title "Use sqlite-vec, not Mongo" --content "Self-hosted Mongo has no vector search." \
+  --rationale "Keeps everything in one file on the tailnet."
+```
+
+Via MCP, agents get these tools: `get_project_brief`, `search_memory`,
+`list_sessions`, `get_session`, `record_decision`, `open_threads`, plus the
+original `publish_memory`, `send_message`, `read_inbox`, `register_agent`,
+`list_agents`, `get_entry`.
+
+## Scope: keeping unrelated work out
+
+Each memory has a `project_key` derived from the git remote (or path) of its
+`cwd`. Searches and briefs are confined to the current project by default:
+
+- `scope="project"` (default) — this project only.
+- `scope="linked"` — plus explicitly linked projects (`POST /v1/projects/link`).
+- `scope="global"` — everything.
+
+Below a tunable relevance floor, a search returns an explicit "no relevant
+context" rather than marginal matches — the thing most likely to derail an
+agent.
+
+## Storage
+
+One SQLite file (`./data/agent_memory.db`): FTS5 for keyword search, a
+`sqlite-vec` `vec0` table for vectors (with `project_key` as a partition key, so
+project isolation is enforced by the index itself). No external database. If
+`sqlite-vec` is unavailable the hub runs keyword-only.
 
 ## Testing
 
-Using an existing Python environment with `pytest` available:
-
 ```bash
-PYTHONPATH=. python -m pytest -q tests/test_service.py tests/test_mcp_server.py tests/test_dashboard_and_configs.py
+PYTHONPATH=. python -m pytest -q
 ```
 
-## Dashboard
+## Security
 
-The service exposes a built-in dashboard at `/` and JSON dashboard data at `/dashboard/data`.
-
-It shows:
-
-- agent and entry counts
-- recent agents
-- recent entries
-- namespace distribution
-- shared-memory search results
-
-## Security Notes
-
-- Keep the backend bound to a Tailscale-reachable host, not a public interface.
-- Set `AGENT_MEMORY_SHARED_KEY` if you want an application-layer secret in addition to Tailscale access controls.
-- Do not store credentials, tokens, or chain-of-thought in the shared memory database.
+- Bind the hub to a Tailscale-reachable host, not a public interface.
+- Set `AGENT_MEMORY_SHARED_KEY` for an application-layer gate on top of
+  Tailscale. The dashboard takes the key via header or a `/login` cookie, never
+  a query string.
+- Secrets are redacted on the source device before anything is sent. Do not
+  store credentials or chain-of-thought regardless.

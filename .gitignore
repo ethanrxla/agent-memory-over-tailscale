@@ -87,3 +87,9 @@ marimo/_lsp/
 __marimo__/
 data/
 generated/
+
+# Local dev
+.venv/
+*.db
+*.db-wal
+*.db-shm

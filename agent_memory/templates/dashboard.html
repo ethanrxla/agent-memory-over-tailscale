@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Memory Dashboard</title>
+  <style>
+    :root {
+      --bg: #f3efe6; --card: rgba(255,255,255,0.85); --ink: #1f1c18;
+      --muted: #5f5a53; --accent: #0f766e; --warn: #b45309; --ok: #15803d;
+      --border: rgba(31,28,24,0.12); --shadow: 0 18px 50px rgba(31,28,24,0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #16151a; --card: rgba(38,36,44,0.85); --ink: #ece9e2;
+        --muted: #a09a92; --accent: #2dd4bf; --warn: #fbbf24; --ok: #4ade80;
+        --border: rgba(236,233,226,0.14); --shadow: 0 18px 50px rgba(0,0,0,0.4);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; color: var(--ink);
+      background: radial-gradient(circle at top left, rgba(15,118,110,0.15), transparent 28%),
+                  radial-gradient(circle at top right, rgba(190,24,93,0.12), transparent 25%),
+                  linear-gradient(180deg, var(--bg) 0%, var(--bg) 100%);
+      min-height: 100vh;
+    }
+    main { max-width: 1280px; margin: 0 auto; padding: 32px 20px 48px; }
+    .hero { display: grid; gap: 14px; margin-bottom: 24px; }
+    .eyebrow { letter-spacing: .14em; text-transform: uppercase; color: var(--accent); font-size: 12px; font-weight: 700; }
+    h1 { margin: 0; font-size: clamp(32px, 6vw, 54px); line-height: .95; max-width: 14ch; }
+    .sub { max-width: 68ch; color: var(--muted); font-size: 16px; line-height: 1.6; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 14px; margin: 24px 0; }
+    .card { background: var(--card); backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); }
+    .stat { padding: 18px; }
+    .stat .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .stat .value { font-size: 32px; font-weight: 700; margin-top: 8px; }
+    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
+    .panel { padding: 18px; overflow: hidden; }
+    .panel h2 { margin: 0 0 14px; font-size: 18px; }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
+    code { font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 12px;
+           background: rgba(15,118,110,.12); padding: 2px 6px; border-radius: 999px; }
+    .search-form { display: grid; grid-template-columns: 1.6fr .9fr auto; gap: 10px; margin-bottom: 16px; }
+    input, button { width: 100%; border-radius: 12px; border: 1px solid var(--border);
+                    padding: 12px 14px; font: inherit; background: var(--card); color: var(--ink); }
+    button { background: var(--accent); color: #05201d; border: none; cursor: pointer; font-weight: 700; }
+    .search-result { border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+    .search-result h3 { margin: 0 0 8px; font-size: 16px; }
+    .meta { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word;
+          font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 12px; line-height: 1.55; }
+    .footer { margin-top: 14px; color: var(--muted); font-size: 13px; }
+    .empty { color: var(--muted); }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: .05em; }
+    .pill.ok { background: rgba(21,128,61,.16); color: var(--ok); }
+    .pill.warn { background: rgba(180,83,9,.16); color: var(--warn); }
+    .pill.muted { background: var(--border); color: var(--muted); }
+    .summary { color: var(--muted); font-size: 13px; line-height: 1.5; margin-top: 4px; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } .search-form { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">Session-aware RAG memory</div>
+      <h1>Agent Memory Dashboard</h1>
+      <p class="sub">Shared, project-scoped memory for Claude and Codex sessions across Tailscale-connected devices.</p>
+    </section>
+
+    <section class="stats">
+      <div class="card stat"><div class="label">Projects</div><div class="value">$stat_projects</div></div>
+      <div class="card stat"><div class="label">Sessions</div><div class="value">$stat_sessions</div></div>
+      <div class="card stat"><div class="label">Events</div><div class="value">$stat_events</div></div>
+      <div class="card stat"><div class="label">Summaries</div><div class="value">$stat_summaries</div></div>
+      <div class="card stat"><div class="label">Entries</div><div class="value">$stat_entries</div></div>
+      <div class="card stat"><div class="label">Agents</div><div class="value">$stat_agents</div></div>
+    </section>
+
+    <div class="grid">
+      <section class="card panel">
+        <h2>Recent Sessions</h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Project</th><th>Session</th><th>Tool</th><th>Status</th><th>Events</th><th>Last activity</th></tr></thead>
+          <tbody>$sessions_html</tbody>
+        </table></div>
+      </section>
+
+      <section class="card panel">
+        <h2>Retrieval Health</h2>
+        <div class="scroll"><table>
+          <tbody>$health_html</tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <div class="grid" style="margin-top:18px;">
+      <section class="card panel">
+        <h2>Recent Entries</h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Project</th><th>Kind</th><th>Title</th><th>Agent</th><th>Updated</th></tr></thead>
+          <tbody>$entries_html</tbody>
+        </table></div>
+      </section>
+
+      <section class="card panel">
+        <h2>Projects</h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Project</th><th>Sessions</th><th>Last active</th></tr></thead>
+          <tbody>$projects_html</tbody>
+        </table></div>
+        <h2 style="margin-top:22px;">Agents</h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Name</th><th>Device</th><th>Seen</th></tr></thead>
+          <tbody>$agents_html</tbody>
+        </table></div>
+        <p class="footer">Last updated: $last_updated</p>
+      </section>
+    </div>
+
+    <div style="margin-top:18px;">
+      <section class="card panel">
+        <h2>Search Memory</h2>
+        <form class="search-form" method="get" action="/">
+          <input type="text" name="q" placeholder="Search sessions, decisions, files, commands..." value="$query_value">
+          <input type="text" name="project_key" placeholder="Optional project key" value="$project_value">
+          <button type="submit">Search</button>
+        </form>
+        $search_results_html
+      </section>
+    </div>
+  </main>
+</body>
+</html>

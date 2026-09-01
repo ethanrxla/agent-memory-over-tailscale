@@ -61,6 +61,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
 
 
 def cmd_search(args: argparse.Namespace) -> None:
+    project_key = args.project_key or _project_from_cwd(getattr(args, "cwd", None))
     payload = {
         "query": args.query,
         "namespace": args.namespace,
@@ -69,7 +70,11 @@ def cmd_search(args: argparse.Namespace) -> None:
         "kind": args.kind,
         "tag": args.tag,
         "limit": args.limit,
+        "project_key": project_key,
+        "scope": args.scope or ("project" if project_key else "global"),
     }
+    if args.min_score is not None:
+        payload["min_score"] = args.min_score
     print(json.dumps(request_json("POST", "/v1/search", payload), indent=2))
 
 
@@ -94,6 +99,57 @@ def cmd_inbox(args: argparse.Namespace) -> None:
         params["namespace"] = args.namespace
     path = f"/v1/messages/inbox/{urllib.parse.quote(args.agent_id)}?{urllib.parse.urlencode(params)}"
     print(json.dumps(request_json("GET", path), indent=2))
+
+
+def cmd_brief(args: argparse.Namespace) -> None:
+    project_key = args.project_key or _project_from_cwd(args.cwd)
+    if not project_key:
+        raise SystemExit("Provide --project-key or --cwd")
+    params = {"max_sessions": str(args.max_sessions)}
+    if args.branch:
+        params["branch"] = args.branch
+    if args.token_budget:
+        params["token_budget"] = str(args.token_budget)
+    quoted = urllib.parse.quote(project_key, safe="")
+    print(json.dumps(request_json("GET", f"/v1/projects/{quoted}/brief?{urllib.parse.urlencode(params)}"), indent=2))
+
+
+def cmd_sessions(args: argparse.Namespace) -> None:
+    params = {"limit": str(args.limit)}
+    project_key = args.project_key or _project_from_cwd(args.cwd)
+    if project_key:
+        params["project_key"] = project_key
+    if args.status:
+        params["status"] = args.status
+    print(json.dumps(request_json("GET", f"/v1/sessions?{urllib.parse.urlencode(params)}"), indent=2))
+
+
+def cmd_session(args: argparse.Namespace) -> None:
+    sid = urllib.parse.quote(args.session_id, safe="")
+    print(json.dumps(request_json("GET", f"/v1/sessions/{sid}?detail={args.detail}"), indent=2))
+
+
+def cmd_decision(args: argparse.Namespace) -> None:
+    payload = {
+        "agent_id": args.agent_id,
+        "project_key": args.project_key or _project_from_cwd(args.cwd),
+        "cwd": args.cwd,
+        "title": args.title,
+        "content": read_content(args),
+        "rationale": args.rationale,
+        "tags": args.tag or [],
+    }
+    print(json.dumps(request_json("POST", "/v1/decisions", payload), indent=2))
+
+
+def _project_from_cwd(cwd: str | None) -> str | None:
+    if not cwd:
+        return None
+    try:
+        from agent_memory.projects import derive_project
+    except Exception:
+        return None
+    return derive_project(cwd)["project_key"]
 
 
 def parse_json(value: str | None) -> dict:
@@ -152,8 +208,43 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--agent-id")
     search.add_argument("--kind", choices=["note", "artifact", "message"])
     search.add_argument("--tag")
+    search.add_argument("--project-key")
+    search.add_argument("--cwd")
+    search.add_argument("--scope", choices=["project", "linked", "global"])
+    search.add_argument("--min-score", type=float)
     search.add_argument("--limit", type=int, default=8)
     search.set_defaults(func=cmd_search)
+
+    brief = subparsers.add_parser("brief", help="Project brief for session start")
+    brief.add_argument("--project-key")
+    brief.add_argument("--cwd", default=os.getcwd())
+    brief.add_argument("--branch")
+    brief.add_argument("--max-sessions", type=int, default=5)
+    brief.add_argument("--token-budget", type=int)
+    brief.set_defaults(func=cmd_brief)
+
+    sessions = subparsers.add_parser("sessions", help="List recent sessions")
+    sessions.add_argument("--project-key")
+    sessions.add_argument("--cwd")
+    sessions.add_argument("--status", choices=["active", "idle", "closed"])
+    sessions.add_argument("--limit", type=int, default=20)
+    sessions.set_defaults(func=cmd_sessions)
+
+    session = subparsers.add_parser("session", help="Fetch one session")
+    session.add_argument("--session-id", required=True)
+    session.add_argument("--detail", choices=["summary", "full"], default="summary")
+    session.set_defaults(func=cmd_session)
+
+    decision = subparsers.add_parser("decision", help="Record a durable decision")
+    decision.add_argument("--agent-id", required=True)
+    decision.add_argument("--project-key")
+    decision.add_argument("--cwd", default=os.getcwd())
+    decision.add_argument("--title", required=True)
+    decision.add_argument("--content")
+    decision.add_argument("--file")
+    decision.add_argument("--rationale")
+    decision.add_argument("--tag", action="append")
+    decision.set_defaults(func=cmd_decision)
 
     send = subparsers.add_parser("send", help="Send a direct or broadcast message")
     send.add_argument("--sender-agent-id", required=True)

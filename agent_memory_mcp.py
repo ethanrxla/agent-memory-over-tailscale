@@ -7,6 +7,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    # Available when the wrapper sits alongside the package (the common case).
+    from agent_memory.projects import derive_project
+except Exception:  # pragma: no cover - wrapper can run standalone
+    derive_project = None  # type: ignore
+
 
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_NAME = "agent-memory-mcp"
@@ -103,19 +109,102 @@ class AgentMemoryMcpServer:
             },
             {
                 "name": "search_memory",
-                "description": "Search the shared memory database for relevant notes, artifacts, or messages.",
+                "description": (
+                    "Semantic + keyword search over shared memory (sessions, decisions, notes). "
+                    "Scoped to the current project by default so unrelated work never leaks in. "
+                    "Pass cwd (or project_key) to scope; use scope='global' only to search everything."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
+                        "cwd": {"type": "string", "description": "Working directory; used to derive the project scope."},
+                        "project_key": {"type": "string", "description": "Explicit project key (overrides cwd)."},
+                        "scope": {"type": "string", "enum": ["project", "linked", "global"], "default": "project"},
                         "namespace": {"type": "string"},
                         "requester_agent_id": {"type": "string"},
                         "agent_id": {"type": "string"},
-                        "kind": {"type": "string", "enum": ["note", "artifact", "message"]},
+                        "kind": {"type": "string", "enum": ["note", "artifact", "message", "decision"]},
                         "tag": {"type": "string"},
+                        "min_score": {"type": "number", "minimum": 0, "maximum": 1},
+                        "source_types": {"type": "array", "items": {"type": "string"}},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
                     },
                     "required": ["query"],
+                },
+            },
+            {
+                "name": "get_project_brief",
+                "description": (
+                    "Call ONCE at the start of a session. Returns a compact, project-scoped brief: "
+                    "recent session summaries, open threads, and locked-in decisions for THIS project. "
+                    "Far cheaper than re-reading a transcript and keeps you from drifting off track."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {"type": "string", "description": "Working directory; used to derive the project."},
+                        "project_key": {"type": "string"},
+                        "branch": {"type": "string"},
+                        "max_sessions": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                        "token_budget": {"type": "integer", "minimum": 100, "maximum": 4000},
+                    },
+                },
+            },
+            {
+                "name": "list_sessions",
+                "description": "List recent coding sessions, optionally filtered by project, so you can see what other agents are doing.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {"type": "string"},
+                        "project_key": {"type": "string"},
+                        "status": {"type": "string", "enum": ["active", "idle", "closed"]},
+                        "tool": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                    },
+                },
+            },
+            {
+                "name": "get_session",
+                "description": "Fetch one session: its summaries, decisions, open threads, and (optionally) its full event log.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "detail": {"type": "string", "enum": ["summary", "full"], "default": "summary"},
+                    },
+                    "required": ["session_id"],
+                },
+            },
+            {
+                "name": "record_decision",
+                "description": "Pin a durable decision so future sessions (and other agents) respect it. Include the rationale.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string"},
+                        "cwd": {"type": "string"},
+                        "project_key": {"type": "string"},
+                        "session_id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "content": {"type": "string"},
+                        "rationale": {"type": "string"},
+                        "supersedes": {"type": "string"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["agent_id", "title", "content"],
+                },
+            },
+            {
+                "name": "open_threads",
+                "description": "List unfinished work items (open threads) recorded across this project's sessions.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {"type": "string"},
+                        "project_key": {"type": "string"},
+                    },
                 },
             },
             {
@@ -259,6 +348,11 @@ class AgentMemoryMcpServer:
             "get_entry": self._tool_get_entry,
             "send_message": self._tool_send_message,
             "read_inbox": self._tool_read_inbox,
+            "get_project_brief": self._tool_get_project_brief,
+            "list_sessions": self._tool_list_sessions,
+            "get_session": self._tool_get_session,
+            "record_decision": self._tool_record_decision,
+            "open_threads": self._tool_open_threads,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -309,17 +403,88 @@ class AgentMemoryMcpServer:
         }
         return self.http.request_json("POST", "/v1/entries/upsert", payload)
 
+    def _resolve_project_key(self, arguments: dict[str, Any]) -> str | None:
+        """Prefer an explicit project_key; otherwise derive one from cwd on-device."""
+        explicit = self._optional_string(arguments, "project_key")
+        if explicit:
+            return explicit
+        cwd = self._optional_string(arguments, "cwd")
+        if cwd and derive_project is not None:
+            return derive_project(cwd)["project_key"]
+        return None
+
     def _tool_search_memory(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_key = self._resolve_project_key(arguments)
+        scope = self._optional_string(arguments, "scope") or ("project" if project_key else "global")
         payload = {
             "query": self._required_string(arguments, "query"),
+            "project_key": project_key,
+            "scope": scope,
             "namespace": self._optional_string(arguments, "namespace"),
             "requester_agent_id": self._optional_string(arguments, "requester_agent_id"),
             "agent_id": self._optional_string(arguments, "agent_id"),
             "kind": self._optional_string(arguments, "kind"),
             "tag": self._optional_string(arguments, "tag"),
+            "source_types": arguments.get("source_types"),
             "limit": self._bounded_int(arguments.get("limit", 8), minimum=1, maximum=50, field="limit"),
         }
+        if "min_score" in arguments and arguments["min_score"] is not None:
+            payload["min_score"] = float(arguments["min_score"])
         return self.http.request_json("POST", "/v1/search", payload)
+
+    def _tool_get_project_brief(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_key = self._resolve_project_key(arguments)
+        if not project_key:
+            raise JsonRpcToolError("Provide cwd or project_key to scope the brief")
+        params: dict[str, Any] = {
+            "max_sessions": self._bounded_int(arguments.get("max_sessions", 5), minimum=1, maximum=20, field="max_sessions"),
+        }
+        branch = self._optional_string(arguments, "branch")
+        if branch:
+            params["branch"] = branch
+        if arguments.get("token_budget"):
+            params["token_budget"] = self._bounded_int(arguments["token_budget"], minimum=100, maximum=4000, field="token_budget")
+        quoted = urllib.parse.quote(project_key, safe="")
+        return self.http.request_json("GET", f"/v1/projects/{quoted}/brief?{urllib.parse.urlencode(params)}")
+
+    def _tool_list_sessions(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "limit": self._bounded_int(arguments.get("limit", 20), minimum=1, maximum=100, field="limit"),
+        }
+        project_key = self._resolve_project_key(arguments)
+        if project_key:
+            params["project_key"] = project_key
+        for field in ("status", "tool"):
+            value = self._optional_string(arguments, field)
+            if value:
+                params[field] = value
+        return self.http.request_json("GET", f"/v1/sessions?{urllib.parse.urlencode(params)}")
+
+    def _tool_get_session(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        session_id = urllib.parse.quote(self._required_string(arguments, "session_id"), safe="")
+        detail = self._optional_string(arguments, "detail") or "summary"
+        return self.http.request_json("GET", f"/v1/sessions/{session_id}?detail={detail}")
+
+    def _tool_record_decision(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "agent_id": self._required_string(arguments, "agent_id"),
+            "project_key": self._resolve_project_key(arguments),
+            "cwd": self._optional_string(arguments, "cwd"),
+            "session_id": self._optional_string(arguments, "session_id"),
+            "title": self._required_string(arguments, "title"),
+            "content": self._required_string(arguments, "content"),
+            "rationale": self._optional_string(arguments, "rationale"),
+            "supersedes": self._optional_string(arguments, "supersedes"),
+            "tags": self._string_list(arguments.get("tags")),
+        }
+        return self.http.request_json("POST", "/v1/decisions", payload)
+
+    def _tool_open_threads(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_key = self._resolve_project_key(arguments)
+        if not project_key:
+            raise JsonRpcToolError("Provide cwd or project_key")
+        quoted = urllib.parse.quote(project_key, safe="")
+        return self.http.request_json("GET", f"/v1/projects/{quoted}/threads")
 
     def _tool_get_entry(self, arguments: dict[str, Any]) -> dict[str, Any]:
         entry_id = urllib.parse.quote(self._required_string(arguments, "entry_id"))
@@ -354,10 +519,12 @@ class AgentMemoryMcpServer:
 
     def _read_resource(self, uri: str) -> dict[str, Any]:
         if uri == "memory://skills":
+            skill_path = self.root_dir / "skill" / "agent-memory" / "SKILL.md"
+            source = skill_path if skill_path.exists() else self.root_dir / "SKILLS.md"
             return {
                 "uri": uri,
                 "mimeType": "text/markdown",
-                "text": _read_text(self.root_dir / "SKILLS.md"),
+                "text": _read_text(source),
             }
         if uri == "memory://service-info":
             health = self.http.request_json("GET", "/health")
