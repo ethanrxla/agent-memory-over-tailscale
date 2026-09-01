@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Memory — Vector Tree</title>
+<style>
+  :root { --bg:#0a0b14; --panel:rgba(20,22,34,0.92); --ink:#e8e9f2; --muted:#9aa0b8;
+          --border:rgba(255,255,255,0.12); --accent:#2dd4bf; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans","Segoe UI",sans-serif; overflow:hidden; }
+  #scene { position:fixed; inset:0; display:block; cursor:grab; }
+  #scene:active { cursor:grabbing; }
+  .hud { position:fixed; z-index:5; }
+  #top { top:0; left:0; right:0; padding:14px 18px; display:flex; align-items:baseline;
+    gap:16px; background:linear-gradient(180deg,rgba(10,11,20,0.85),transparent); pointer-events:none; }
+  #top h1 { margin:0; font-size:17px; font-weight:700; letter-spacing:.02em; }
+  #top .sub { color:var(--muted); font-size:13px; }
+  #top .badge { color:var(--accent); font-size:12px; border:1px solid var(--border);
+    padding:2px 9px; border-radius:999px; }
+  #legend { top:58px; left:18px; max-width:280px; background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; padding:10px 12px; backdrop-filter:blur(8px); }
+  #legend h2 { margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
+  .leg-row { display:flex; align-items:center; gap:8px; padding:3px 0; font-size:12.5px; cursor:pointer; }
+  .leg-row .dot { width:11px; height:11px; border-radius:50%; flex:0 0 auto; box-shadow:0 0 8px currentColor; }
+  .leg-row.off { opacity:0.35; }
+  .leg-row .cnt { margin-left:auto; color:var(--muted); font-size:11px; }
+  #detail { top:58px; right:0; bottom:0; width:min(400px,86vw); background:var(--panel);
+    border-left:1px solid var(--border); backdrop-filter:blur(10px); padding:18px 18px 28px;
+    overflow-y:auto; transform:translateX(100%); transition:transform .22s ease; }
+  #detail.open { transform:none; }
+  #detail .close { position:absolute; top:12px; right:14px; cursor:pointer; color:var(--muted);
+    font-size:20px; line-height:1; background:none; border:none; }
+  #detail h2 { margin:2px 40px 4px 0; font-size:18px; }
+  #detail .meta { color:var(--muted); font-size:12.5px; margin-bottom:14px; line-height:1.7; }
+  #detail .chip { display:inline-block; background:rgba(45,212,191,0.14); color:var(--accent);
+    padding:1px 8px; border-radius:999px; font-size:11px; margin-right:6px; }
+  #detail h3 { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted);
+    margin:18px 0 7px; }
+  #detail p.summary { font-size:13.5px; line-height:1.6; color:#d4d6e6; margin:0; }
+  #detail ul { margin:0; padding-left:18px; }
+  #detail li { font-size:13px; line-height:1.55; margin-bottom:5px; }
+  #detail .empty { color:var(--muted); font-style:italic; font-size:12.5px; }
+  #hint { bottom:14px; left:18px; color:var(--muted); font-size:12px; pointer-events:none; }
+  #controls { bottom:14px; right:18px; display:flex; gap:8px; }
+  #controls button { background:var(--panel); color:var(--ink); border:1px solid var(--border);
+    border-radius:9px; padding:7px 11px; font:inherit; font-size:12px; cursor:pointer; }
+  #controls button:hover { border-color:var(--accent); }
+  #tooltip { position:fixed; z-index:6; pointer-events:none; background:rgba(10,11,20,0.95);
+    border:1px solid var(--border); border-radius:8px; padding:5px 9px; font-size:12px;
+    color:var(--ink); display:none; max-width:280px; }
+  #empty-state { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    text-align:center; color:var(--muted); font-size:15px; padding:40px; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div class="hud" id="top">
+  <h1>Vector Tree</h1>
+  <span class="sub" id="subtitle">loading…</span>
+  <span class="badge" id="layout-badge"></span>
+</div>
+<div class="hud" id="legend"><h2>Projects</h2><div id="legend-rows"></div></div>
+<div class="hud" id="detail"><button class="close" onclick="closeDetail()">×</button><div id="detail-body"></div></div>
+<div class="hud" id="hint">drag to rotate · scroll to zoom · click a node</div>
+<div class="hud" id="controls">
+  <button onclick="resetView()">reset</button>
+  <button onclick="toggleSpin()" id="spin-btn">pause spin</button>
+</div>
+<div id="tooltip"></div>
+<div id="empty-state"></div>
+<script>
+// Palette for project clusters (distinct, glowing on dark).
+const PALETTE = ["#2dd4bf","#f472b6","#facc15","#60a5fa","#a78bfa","#fb923c",
+                 "#4ade80","#f87171","#38bdf8","#e879f9","#a3e635","#fbbf24"];
+const GRAPH_DATA = __GRAPH_DATA__;   // null on the hub page (fetched), inlined for snapshots
+const DATA_URL   = __DATA_URL__;     // e.g. "/v1/graph?scope=global"
+
+const canvas = document.getElementById("scene");
+const ctx = canvas.getContext("2d");
+let W=0,H=0,DPR=Math.min(2,window.devicePixelRatio||1);
+function resize(){ W=canvas.clientWidth; H=canvas.clientHeight;
+  canvas.width=W*DPR; canvas.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+window.addEventListener("resize",resize);
+
+let graph={nodes:[],edges:[]};
+let rotX=-0.35, rotY=0.6, zoom=1, spin=true;
+let hidden=new Set(); let selectedId=null; let hoverNode=null;
+let drag=null;
+
+function project(n){
+  // rotate around Y then X, then perspective.
+  let x=n.x,y=n.y,z=n.z;
+  let cy=Math.cos(rotY),sy=Math.sin(rotY);
+  let x1=x*cy - z*sy, z1=x*sy + z*cy;
+  let cx=Math.cos(rotX),sx=Math.sin(rotX);
+  let y1=y*cx - z1*sx, z2=y*sx + z1*cx;
+  const CAM=340, f=520*zoom;
+  const denom=(CAM - z2);
+  const s=f/Math.max(40,denom);
+  return { sx:W/2 + x1*s, sy:H/2 + y1*s, depth:z2, scale:s };
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // faint starfield gradient
+  const g=ctx.createRadialGradient(W/2,H*0.4,60,W/2,H*0.4,Math.max(W,H)*0.8);
+  g.addColorStop(0,"rgba(45,212,191,0.05)"); g.addColorStop(1,"rgba(10,11,20,0)");
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  const visible = graph.nodes.filter(n=>!hidden.has(n.project_key));
+  const P=new Map(); visible.forEach(n=>P.set(n.id,project(n)));
+
+  // edges first (behind nodes)
+  ctx.lineWidth=1;
+  graph.edges.forEach(e=>{
+    const a=P.get(e.source), b=P.get(e.target); if(!a||!b) return;
+    const na=byId.get(e.source);
+    const col=PALETTE[(na?na.color_index:0)%PALETTE.length];
+    const alpha=0.10 + 0.14*Math.max(0,(a.depth+b.depth)/2+120)/240;
+    ctx.strokeStyle=hexA(col,Math.min(0.4,alpha));
+    ctx.beginPath(); ctx.moveTo(a.sx,a.sy); ctx.lineTo(b.sx,b.sy); ctx.stroke();
+  });
+
+  // nodes back-to-front
+  const order=visible.slice().sort((n1,n2)=>P.get(n1.id).depth-P.get(n2.id).depth);
+  hoverNode=null;
+  order.forEach(n=>{
+    const p=P.get(n.id); const col=PALETTE[n.color_index%PALETTE.length];
+    const r=Math.max(2,n.size*p.scale*0.5);
+    const depthShade=Math.max(0.35,Math.min(1,(p.depth+160)/300));
+    // glow
+    const grd=ctx.createRadialGradient(p.sx,p.sy,0,p.sx,p.sy,r*2.6);
+    grd.addColorStop(0,hexA(col,0.5*depthShade)); grd.addColorStop(1,hexA(col,0));
+    ctx.fillStyle=grd; ctx.beginPath(); ctx.arc(p.sx,p.sy,r*2.6,0,7); ctx.fill();
+    // core
+    ctx.fillStyle=hexA(col,depthShade);
+    ctx.beginPath(); ctx.arc(p.sx,p.sy,r,0,7); ctx.fill();
+    if(n.type==="project"){ ctx.strokeStyle=hexA("#ffffff",0.5*depthShade); ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.arc(p.sx,p.sy,r+2,0,7); ctx.stroke(); }
+    if(n.id===selectedId){ ctx.strokeStyle="#fff"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(p.sx,p.sy,r+5,0,7); ctx.stroke(); }
+    // project labels always; session labels when large/near
+    if(n.type==="project"||p.scale>1.1){
+      ctx.fillStyle=hexA("#ffffff",Math.min(0.9,depthShade));
+      ctx.font=(n.type==="project"?"600 13px":"12px")+' "IBM Plex Sans",sans-serif';
+      ctx.fillText(n.label.slice(0,28), p.sx+r+5, p.sy+4);
+    }
+    n._sx=p.sx; n._sy=p.sy; n._r=r;
+  });
+}
+
+function hexA(hex,a){ const n=parseInt(hex.slice(1),16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+
+let byId=new Map();
+function pickNode(mx,my){
+  let best=null,bd=1e9;
+  for(const n of graph.nodes){ if(hidden.has(n.project_key)||n._sx==null) continue;
+    const d=Math.hypot(n._sx-mx,n._sy-my); if(d< (n._r+7) && d<bd){ bd=d; best=n; } }
+  return best;
+}
+
+// ---- interaction ----
+canvas.addEventListener("mousedown",e=>{ drag={x:e.clientX,y:e.clientY,moved:false}; });
+window.addEventListener("mousemove",e=>{
+  if(drag){ const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+    if(Math.abs(dx)+Math.abs(dy)>3) drag.moved=true;
+    rotY+=dx*0.006; rotX+=dy*0.006; rotX=Math.max(-1.4,Math.min(1.4,rotX));
+    drag.x=e.clientX; drag.y=e.clientY; }
+  else { const n=pickNode(e.clientX,e.clientY); const tt=document.getElementById("tooltip");
+    if(n){ tt.style.display="block"; tt.style.left=(e.clientX+12)+"px"; tt.style.top=(e.clientY+12)+"px";
+      tt.textContent=(n.type==="project"?"▣ ":"● ")+n.label; canvas.style.cursor="pointer"; }
+    else { tt.style.display="none"; canvas.style.cursor="grab"; } }
+});
+window.addEventListener("mouseup",e=>{
+  if(drag && !drag.moved){ const n=pickNode(e.clientX,e.clientY); if(n) openDetail(n); else closeDetail(); }
+  drag=null;
+});
+canvas.addEventListener("wheel",e=>{ e.preventDefault(); zoom*=Math.exp(-e.deltaY*0.0012);
+  zoom=Math.max(0.25,Math.min(6,zoom)); },{passive:false});
+// touch
+let pinch=null;
+canvas.addEventListener("touchstart",e=>{ if(e.touches.length===1) drag={x:e.touches[0].clientX,y:e.touches[0].clientY,moved:false};
+  else if(e.touches.length===2) pinch=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY); },{passive:false});
+canvas.addEventListener("touchmove",e=>{ e.preventDefault();
+  if(e.touches.length===1&&drag){ const t=e.touches[0]; rotY+=(t.clientX-drag.x)*0.006; rotX+=(t.clientY-drag.y)*0.006;
+    rotX=Math.max(-1.4,Math.min(1.4,rotX)); drag.x=t.clientX; drag.y=t.clientY; drag.moved=true; }
+  else if(e.touches.length===2&&pinch){ const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    zoom*=d/pinch; zoom=Math.max(0.25,Math.min(6,zoom)); pinch=d; } },{passive:false});
+canvas.addEventListener("touchend",e=>{ if(drag&&!drag.moved){ const n=pickNode(drag.x,drag.y); if(n) openDetail(n); } drag=null; pinch=null; });
+
+function openDetail(n){ selectedId=n.id; const b=document.getElementById("detail-body");
+  const m=n.meta||{};
+  if(n.type==="project"){
+    b.innerHTML=`<h2>${esc(n.label)}</h2><div class="meta"><span class="chip">project</span>`+
+      `<code>${esc(n.project_key)}</code><br>${m.sessions||0} session(s)</div>`+
+      `<h3>Tip</h3><p class="summary">Click the session nodes linked to this project to read their summaries.</p>`;
+  } else {
+    const dec=(m.summary_decisions||[]), thr=(m.summary_threads||[]);
+    b.innerHTML=`<h2>${esc(n.label)}</h2>`+
+      `<div class="meta"><span class="chip">${esc(m.tool||'session')}</span>`+
+      `<span class="chip">${esc(m.status||'')}</span>`+
+      `<br>${esc(n.project_key)}`+
+      (m.branch?`<br>branch <code>${esc(m.branch)}</code>`:"")+
+      (m.device?` · ${esc(m.device)}`:"")+
+      `<br>${m.events||0} events · ${fmtTs(m.last_event_at)}</div>`+
+      `<h3>Summary</h3>`+(m.summary?`<p class="summary">${esc(m.summary)}</p>`:`<p class="empty">No summary yet — the worker generates these in the background.</p>`)+
+      renderList("Decisions",dec)+renderList("Open threads",thr);
+  }
+  document.getElementById("detail").classList.add("open");
+}
+function renderList(title,items){ if(!items||!items.length) return "";
+  return `<h3>${title}</h3><ul>`+items.map(i=>`<li>${esc(i)}</li>`).join("")+`</ul>`; }
+function closeDetail(){ selectedId=null; document.getElementById("detail").classList.remove("open"); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function fmtTs(s){ if(!s) return "-"; const d=new Date(s); return isNaN(d)?s:d.toLocaleString(); }
+
+function resetView(){ rotX=-0.35; rotY=0.6; zoom=1; }
+function toggleSpin(){ spin=!spin; document.getElementById("spin-btn").textContent=spin?"pause spin":"resume spin"; }
+
+function buildLegend(){
+  const counts={}; graph.nodes.forEach(n=>{ if(n.type==="session") counts[n.project_key]=(counts[n.project_key]||0)+1; });
+  const rows=document.getElementById("legend-rows"); rows.innerHTML="";
+  (graph.projects||[]).forEach((pk,i)=>{
+    const col=PALETTE[i%PALETTE.length];
+    const el=document.createElement("div"); el.className="leg-row";
+    el.innerHTML=`<span class="dot" style="background:${col};color:${col}"></span>`+
+      `<span>${esc(pk.split('/').pop())}</span><span class="cnt">${counts[pk]||0}</span>`;
+    el.onclick=()=>{ if(hidden.has(pk)) hidden.delete(pk); else hidden.add(pk); el.classList.toggle("off"); };
+    rows.appendChild(el);
+  });
+}
+
+function loop(){ if(spin && !drag) rotY+=0.0016; draw(); requestAnimationFrame(loop); }
+
+function ingest(d){
+  graph=d; byId=new Map(); graph.nodes.forEach(n=>byId.set(n.id,n));
+  document.getElementById("subtitle").textContent=
+    `${d.total_sessions} sessions · ${d.projects.length} projects`;
+  document.getElementById("layout-badge").textContent=
+    d.layout==="semantic"?`semantic layout · ${d.embedded_sessions}/${d.total_sessions} embedded`:"structural layout (no embeddings yet)";
+  buildLegend();
+  if(!graph.nodes.length){ document.getElementById("empty-state").style.display="flex";
+    document.getElementById("empty-state").textContent="No sessions yet. Run the watcher backfill, then reload."; }
+}
+
+resize();
+if(GRAPH_DATA){ ingest(GRAPH_DATA); loop(); }
+else { fetch(DATA_URL).then(r=>r.json()).then(d=>{ ingest(d); loop(); })
+  .catch(err=>{ document.getElementById("empty-state").style.display="flex";
+    document.getElementById("empty-state").textContent="Could not load graph data: "+err; }); }
+</script>
+</body>
+</html>

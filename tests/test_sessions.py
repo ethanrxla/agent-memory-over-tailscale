@@ -135,3 +135,40 @@ def test_open_threads_endpoint(client: TestClient) -> None:
 
     threads = client.get("/v1/projects/path:/repo/a/threads").json()["open_threads"]
     assert {t["thread"] for t in threads} == {"wire up the dashboard", "add auth"}
+
+
+def test_graph_endpoint_returns_nodes_and_edges(client: TestClient) -> None:
+    from agent_memory.nim import NimClient
+    from agent_memory.summarize import generate_summary
+
+    ctx = client.app.state.ctx
+    for i, proj in enumerate(["path:/repo/a", "path:/repo/a", "path:/repo/b"]):
+        sid = f"g{i}"
+        client.post("/v1/sessions/events", json={
+            "session": _session(sid, proj, ai_title=f"Session {i}"),
+            "events": _events(3),
+        })
+        conn = ctx.open()
+        try:
+            generate_summary(conn, ctx.config, NimClient(ctx.config), sid, tier="final")
+            conn.commit()
+        finally:
+            conn.close()
+
+    data = client.get("/v1/graph?scope=global").json()
+    # 2 projects + 3 sessions = 5 nodes; 3 project->session edges.
+    assert len(data["nodes"]) == 5
+    assert len(data["edges"]) == 3
+    assert set(data["projects"]) == {"path:/repo/a", "path:/repo/b"}
+    # No embeddings in tests -> structural layout, but still fully formed.
+    assert data["layout"] in {"structural", "semantic"}
+    session_nodes = [n for n in data["nodes"] if n["type"] == "session"]
+    assert all("x" in n and "y" in n and "z" in n for n in session_nodes)
+
+
+def test_graph_page_serves_html(client: TestClient) -> None:
+    resp = client.get("/graph")
+    assert resp.status_code == 200
+    assert "Vector Tree" in resp.text
+    assert "__GRAPH_DATA__" not in resp.text  # placeholder must be substituted
+    assert "/v1/graph" in resp.text
