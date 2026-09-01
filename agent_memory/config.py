@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -37,6 +38,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_json(name: str, default: dict[str, Any]) -> dict[str, Any]:
+    import json
+
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return dict(default)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return dict(default)
+    return parsed if isinstance(parsed, dict) else dict(default)
+
+
 @dataclass
 class Config:
     """Resolved runtime configuration.
@@ -59,12 +73,30 @@ class Config:
     )
     embed_dim: int = field(default_factory=lambda: _env_int("AGENT_MEMORY_EMBED_DIM", 2048))
     embed_batch: int = field(default_factory=lambda: _env_int("AGENT_MEMORY_EMBED_BATCH", 32))
+    # kimi-k3: fastest reliable strict-JSON summariser on NIM as of 2026-09
+    # (~10s vs ~24s for deepseek-v4-flash), and it names files in summaries.
+    # The previous default nemotron-nano-9b-v2 was EOL'd 2026-08-26 (410 Gone).
     summary_model: str = field(
-        default_factory=lambda: _env_str("AGENT_MEMORY_SUMMARY_MODEL", "nvidia/nvidia-nemotron-nano-9b-v2")
+        default_factory=lambda: _env_str("AGENT_MEMORY_SUMMARY_MODEL", "moonshotai/kimi-k3")
+    )
+    # Per-model request extras (e.g. flags to disable "thinking"). JSON object.
+    # kimi-k3 needs none; deepseek models want {"chat_template_kwargs":{"thinking":false}}.
+    summary_extra_body: dict[str, Any] = field(
+        default_factory=lambda: _env_json("AGENT_MEMORY_SUMMARY_EXTRA_BODY", {})
     )
     # Free tier is ~40 requests/minute/model; stay well under it.
     nim_rpm: int = field(default_factory=lambda: _env_int("AGENT_MEMORY_NIM_RPM", 30))
     nim_timeout: float = field(default_factory=lambda: _env_float("AGENT_MEMORY_NIM_TIMEOUT", 60.0))
+    # Summaries run in the background and can be large, so they get a longer
+    # ceiling than interactive query embeds. Measured: a ~14k-char transcript
+    # can exceed 60s on the free tier under load.
+    summary_timeout: float = field(default_factory=lambda: _env_float("AGENT_MEMORY_SUMMARY_TIMEOUT", 120.0))
+    # Max transcript characters sent to the summariser. Smaller = faster and
+    # cheaper; the builder keeps the head (original intent) and tail (recent
+    # state) and drops the low-signal middle.
+    summary_transcript_chars: int = field(
+        default_factory=lambda: _env_int("AGENT_MEMORY_SUMMARY_TRANSCRIPT_CHARS", 10000)
+    )
 
     # Retrieval tuning.
     recency_half_life_days: float = field(

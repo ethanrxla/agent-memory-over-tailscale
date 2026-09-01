@@ -9,7 +9,7 @@ services:
       # retrieval and extractive summaries -- fully functional, just not semantic.
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       AGENT_MEMORY_EMBED_MODEL: ${AGENT_MEMORY_EMBED_MODEL:-nvidia/nemotron-3-embed-1b}
-      AGENT_MEMORY_SUMMARY_MODEL: ${AGENT_MEMORY_SUMMARY_MODEL:-nvidia/nvidia-nemotron-nano-9b-v2}
+      AGENT_MEMORY_SUMMARY_MODEL: ${AGENT_MEMORY_SUMMARY_MODEL:-moonshotai/kimi-k3}
     ports:
       - "8787:8787"
     volumes:

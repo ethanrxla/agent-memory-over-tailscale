@@ -197,7 +197,7 @@ def generate_summary(
     result = extractive_summary(session, facts)
 
     if nim is not None and nim.enabled:
-        transcript = build_transcript(facts)
+        transcript = build_transcript(facts, max_chars=config.summary_transcript_chars)
         if transcript:
             instructions = ROLLING_INSTRUCTIONS if tier == "rolling" else FINAL_INSTRUCTIONS
             header = (

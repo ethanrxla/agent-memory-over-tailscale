@@ -62,7 +62,7 @@ class NimClient:
     def enabled(self) -> bool:
         return self.config.nim_enabled
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _post(self, path: str, payload: dict[str, Any], timeout: float | None = None) -> dict[str, Any] | None:
         if not self.enabled:
             self.last_error = "NVIDIA_API_KEY is not set"
             return None
@@ -82,7 +82,7 @@ class NimClient:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.config.nim_timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout or self.config.nim_timeout) as response:
                 self.last_error = None
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
@@ -130,11 +130,21 @@ class NimClient:
             "temperature": temperature,
             "stream": False,
         }
-        data = self._post("/chat/completions", payload)
+        # Models vary in how thinking is toggled; the per-model flags live in
+        # config so switching summary models needs no code change. Disabling
+        # thinking keeps a background summariser fast and its output clean.
+        if self.config.summary_extra_body:
+            payload.update(self.config.summary_extra_body)
+        data = self._post("/chat/completions", payload, timeout=self.config.summary_timeout)
         if not data:
             return None
         try:
-            content = data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            content = message.get("content")
+            # Some reasoning models leave content empty and put the answer in
+            # reasoning_content; fall back to it rather than returning nothing.
+            if not (isinstance(content, str) and content.strip()):
+                content = message.get("reasoning_content") or message.get("reasoning")
         except (KeyError, IndexError, TypeError) as exc:
             self.last_error = f"unexpected chat response: {exc}"
             return None
