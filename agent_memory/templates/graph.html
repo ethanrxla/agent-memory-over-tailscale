@@ -10,7 +10,10 @@
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
     font-family:"IBM Plex Sans","Segoe UI",sans-serif; overflow:hidden; }
-  #scene { position:fixed; inset:0; display:block; cursor:grab; }
+  /* Canvas is a replaced element: inset:0 positions it but does not replace its
+     intrinsic 300x150 CSS size. Explicit dimensions keep its coordinate space
+     aligned with the viewport and prevent the whole graph piling up at (0,0). */
+  #scene { position:fixed; inset:0; width:100vw; height:100vh; display:block; cursor:grab; touch-action:none; }
   #scene:active { cursor:grabbing; }
   .hud { position:fixed; z-index:5; }
   #top { top:0; left:0; right:0; padding:14px 18px; display:flex; align-items:baseline;
@@ -39,6 +42,10 @@
   #detail h3 { font-size:12px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted);
     margin:18px 0 7px; }
   #detail p.summary { font-size:13.5px; line-height:1.6; color:#d4d6e6; margin:0; }
+  #detail code { overflow-wrap:anywhere; }
+  #detail .session-link { display:inline-block; margin-top:18px; padding:8px 11px; border-radius:8px;
+    border:1px solid var(--border); color:var(--accent); text-decoration:none; font-size:12px; }
+  #detail .session-link:hover { border-color:var(--accent); background:rgba(45,212,191,0.08); }
   #detail ul { margin:0; padding-left:18px; }
   #detail li { font-size:13px; line-height:1.55; margin-bottom:5px; }
   #detail .empty { color:var(--muted); font-style:italic; font-size:12.5px; }
@@ -60,6 +67,7 @@
   <h1>Vector Tree</h1>
   <span class="sub" id="subtitle">loading…</span>
   <span class="badge" id="layout-badge"></span>
+  <a href="/" style="pointer-events:auto;color:var(--muted);font-size:12px;text-decoration:none">dashboard →</a>
 </div>
 <div class="hud" id="legend"><h2>Projects</h2><div id="legend-rows"></div></div>
 <div class="hud" id="detail"><button class="close" onclick="closeDetail()">×</button><div id="detail-body"></div></div>
@@ -80,7 +88,7 @@ const DATA_URL   = __DATA_URL__;     // e.g. "/v1/graph?scope=global"
 const canvas = document.getElementById("scene");
 const ctx = canvas.getContext("2d");
 let W=0,H=0,DPR=Math.min(2,window.devicePixelRatio||1);
-function resize(){ W=canvas.clientWidth; H=canvas.clientHeight;
+function resize(){ W=window.innerWidth; H=window.innerHeight;
   canvas.width=W*DPR; canvas.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
 window.addEventListener("resize",resize);
 
@@ -205,9 +213,13 @@ function openDetail(n){ selectedId=n.id; const b=document.getElementById("detail
       `<br>${esc(n.project_key)}`+
       (m.branch?`<br>branch <code>${esc(m.branch)}</code>`:"")+
       (m.device?` · ${esc(m.device)}`:"")+
-      `<br>${m.events||0} events · ${fmtTs(m.last_event_at)}</div>`+
+      `<br>${m.events||0} events · ${m.tokens||0} estimated tokens`+
+      `<br>started ${fmtTs(m.started_at)} · last active ${fmtTs(m.last_event_at)}`+
+      (m.cwd?`<br><code>${esc(m.cwd)}</code>`:"")+`</div>`+
       `<h3>Summary</h3>`+(m.summary?`<p class="summary">${esc(m.summary)}</p>`:`<p class="empty">No summary yet — the worker generates these in the background.</p>`)+
-      renderList("Decisions",dec)+renderList("Open threads",thr);
+      (m.last_prompt?`<h3>Last request</h3><p class="summary">${esc(m.last_prompt)}</p>`:"")+
+      renderList("Decisions",dec)+renderList("Open threads",thr)+
+      `<a class="session-link" href="/v1/sessions/${encodeURIComponent(m.session_id)}?detail=full" target="_blank" rel="noopener">Open full session record ↗</a>`;
   }
   document.getElementById("detail").classList.add("open");
 }
@@ -217,7 +229,7 @@ function closeDetail(){ selectedId=null; document.getElementById("detail").class
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function fmtTs(s){ if(!s) return "-"; const d=new Date(s); return isNaN(d)?s:d.toLocaleString(); }
 
-function resetView(){ rotX=-0.35; rotY=0.6; zoom=1; }
+function resetView(){ rotX=-0.35; rotY=0.6; zoom=1; closeDetail(); }
 function toggleSpin(){ spin=!spin; document.getElementById("spin-btn").textContent=spin?"pause spin":"resume spin"; }
 
 function buildLegend(){

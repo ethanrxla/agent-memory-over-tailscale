@@ -148,7 +148,8 @@ def build_graph(
     sessions = conn.execute(
         f"""
         SELECT s.session_id, s.project_key, s.tool, s.ai_title, s.status,
-               s.event_count, s.last_event_at, s.git_branch, s.device_name,
+               s.event_count, s.token_estimate, s.started_at, s.last_event_at,
+               s.last_prompt, s.cwd, s.git_branch, s.device_name,
                (SELECT summary FROM session_summaries
                 WHERE session_id = s.session_id
                 ORDER BY CASE tier WHEN 'final' THEN 0 ELSE 1 END LIMIT 1) AS summary,
@@ -225,13 +226,18 @@ def build_graph(
             "SELECT display_name FROM projects WHERE project_key = ?", (pkey,)
         ).fetchone()
         pid = f"project:{pkey}"
+        # A one-session project has the same centroid as its only session. Move
+        # every project root toward the origin so roots and leaves remain
+        # visibly separate and independently clickable.
+        root_scale = 0.72
+        px, py, pz = cx * root_scale, cy * root_scale, cz * root_scale
         nodes.append({
             "id": pid,
             "type": "project",
             "label": display["display_name"] if display else pkey.rsplit("/", 1)[-1],
             "project_key": pkey,
             "color_index": project_palette.index(pkey),
-            "x": cx, "y": cy, "z": cz,
+            "x": px, "y": py, "z": pz,
             "size": 6.0,
             "meta": {"sessions": len(rows)},
         })
@@ -251,8 +257,12 @@ def build_graph(
                     "tool": r["tool"],
                     "status": r["status"],
                     "events": r["event_count"],
+                    "tokens": r["token_estimate"],
+                    "started_at": r["started_at"],
                     "branch": r["git_branch"],
                     "device": r["device_name"],
+                    "cwd": r["cwd"],
+                    "last_prompt": r["last_prompt"],
                     "last_event_at": r["last_event_at"],
                     "summary": r["summary"],
                     "summary_decisions": _json_list(r["decisions_json"]),

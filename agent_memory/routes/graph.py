@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from importlib import resources
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Query
 from fastapi.responses import HTMLResponse
@@ -38,7 +39,7 @@ def register(app: FastAPI, ctx: AppContext) -> None:
         params = {"scope": scope}
         if project_key:
             params["project_key"] = project_key
-        query = "&".join(f"{k}={v}" for k, v in params.items())
+        query = urlencode(params)
         # Hub page fetches live; GRAPH_DATA stays null.
         html = template.replace("__GRAPH_DATA__", "null").replace(
             "__DATA_URL__", json.dumps(f"/v1/graph?{query}")

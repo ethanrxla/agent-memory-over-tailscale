@@ -164,6 +164,15 @@ def test_graph_endpoint_returns_nodes_and_edges(client: TestClient) -> None:
     assert data["layout"] in {"structural", "semantic"}
     session_nodes = [n for n in data["nodes"] if n["type"] == "session"]
     assert all("x" in n and "y" in n and "z" in n for n in session_nodes)
+    assert all("last_prompt" in n["meta"] and "cwd" in n["meta"] for n in session_nodes)
+
+    # Project roots must not cover their only session node; both need to be
+    # independently visible/clickable in the canvas.
+    single_project = next(n for n in data["nodes"] if n["id"] == "project:path:/repo/b")
+    single_session = next(n for n in data["nodes"] if n["id"] == "session:g2")
+    assert (single_project["x"], single_project["y"], single_project["z"]) != (
+        single_session["x"], single_session["y"], single_session["z"]
+    )
 
 
 def test_graph_page_serves_html(client: TestClient) -> None:
@@ -172,3 +181,11 @@ def test_graph_page_serves_html(client: TestClient) -> None:
     assert "Vector Tree" in resp.text
     assert "__GRAPH_DATA__" not in resp.text  # placeholder must be substituted
     assert "/v1/graph" in resp.text
+    assert "width:100vw; height:100vh" in resp.text
+    assert "Open full session record" in resp.text
+
+
+def test_graph_page_url_encodes_project_key(client: TestClient) -> None:
+    resp = client.get("/graph", params={"scope": "project", "project_key": "repo/a&b"})
+    assert resp.status_code == 200
+    assert "project_key=repo%2Fa%26b" in resp.text
