@@ -184,6 +184,17 @@ def cmd_decide(a):
     print(f"recorded decision '{a.title}' -> {r['entry_id']}")
 
 
+def cmd_context(a):
+    """One-shot for the /memory slash command: brief with no query, else search."""
+    if getattr(a, "query", "") and a.query.strip():
+        a.limit = 6
+        a.min_score = None
+        cmd_search(a)
+    else:
+        a.max_sessions = 5
+        cmd_brief(a)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(prog="memory", description="Agent Memory hub client")
     p.add_argument("--cwd", default=os.getcwd())
@@ -200,6 +211,8 @@ def main() -> int:
     th = sub.add_parser("threads"); th.set_defaults(fn=cmd_threads)
     de = sub.add_parser("decide"); de.add_argument("title"); de.add_argument("content")
     de.add_argument("--rationale"); de.set_defaults(fn=cmd_decide)
+    cx = sub.add_parser("context"); cx.add_argument("query", nargs="?", default="")
+    cx.set_defaults(fn=cmd_context)
 
     a = p.parse_args()
     a.fn(a)

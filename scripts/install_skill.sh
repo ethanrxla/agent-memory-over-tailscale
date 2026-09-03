@@ -19,6 +19,11 @@ echo "Installing agent-memory skill:"
 install_to "$DEST_CLAUDE"
 [ -d "$HOME/.codex" ] && install_to "$DEST_CODEX" || true
 
+# Install the /memory slash command (Claude Code user command).
+mkdir -p "$HOME/.claude/commands"
+cp "$ROOT_DIR/commands/memory.md" "$HOME/.claude/commands/memory.md"
+echo "  installed -> $HOME/.claude/commands/memory.md  (use: /memory)"
+
 cat <<TXT
 
 Done. The skill calls the hub at \$AGENT_MEMORY_URL (default http://127.0.0.1:8787).
