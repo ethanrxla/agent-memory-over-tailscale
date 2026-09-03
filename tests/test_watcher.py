@@ -224,3 +224,23 @@ def test_subagent_transcripts_fold_into_parent_as_sidechain(tmp_path: Path, clie
         conn.close()
     # The extractive summary is built from non-sidechain events only.
     assert "explore the auth module" not in result["summary"]
+
+
+def test_codex_parses_item_completed_schema(tmp_path: Path) -> None:
+    """Mid-2026 rollouts wrap content in event_msg/item_completed items."""
+    lines = [
+        {"type": "session_meta", "timestamp": "t0", "payload": {"id": "cx-ic", "cwd": "/home/x/proj"}},
+        {"type": "event_msg", "timestamp": "t1", "payload": {"type": "item_completed",
+         "item": {"type": "UserMessage", "content": [{"type": "text", "text": "fix the bug"}]}}},
+        {"type": "event_msg", "timestamp": "t2", "payload": {"type": "item_completed",
+         "item": {"type": "CommandExecution", "command": ["/bin/bash", "-lc", "pytest -q"]}}},
+        {"type": "event_msg", "timestamp": "t3", "payload": {"type": "item_completed",
+         "item": {"type": "Reasoning", "raw_content": []}}},
+    ]
+    path = tmp_path / "rollout-2026-08-01T00-00-00-cx-ic.jsonl"
+    _write_transcript(path, lines)
+    session, events = codex.parse_transcript(path)
+    assert session.session_id == "cx-ic"
+    assert [e.kind for e in events].count("prompt") == 1
+    assert any("pytest" in c for e in events for c in e.commands)  # command captured
+    assert not any(e.kind == "reply" for e in events)  # Reasoning dropped

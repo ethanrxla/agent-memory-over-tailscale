@@ -60,7 +60,14 @@ def parse_transcript(path: Path) -> tuple[ParsedSession | None, list[ParsedEvent
         if rtype != "event_msg":
             continue
 
-        event = _event_to_event(payload, seq, ts)
+        # Mid-2026 rollouts nest content in an item_completed wrapper; older and
+        # current CLIs emit flat event_msg types. Handle both so no schema
+        # variant silently drops a session.
+        if payload.get("type") == "item_completed":
+            item = payload.get("item")
+            event = _item_to_event(item, seq, ts) if isinstance(item, dict) else None
+        else:
+            event = _event_to_event(payload, seq, ts)
         if event is None:
             continue
         events.append(event)
@@ -121,6 +128,68 @@ def _event_to_event(payload: dict[str, Any], seq: int, ts: str | None) -> Parsed
     # task_started/task_complete/token_count/context_compacted/turn_aborted/
     # view_image_tool_call and everything else: dropped.
     return None
+
+
+def _item_to_event(item: dict[str, Any], seq: int, ts: str | None) -> ParsedEvent | None:
+    """Handle the item_completed wrapper schema (mid-2026 rollouts)."""
+    itype = item.get("type")
+
+    if itype == "UserMessage":
+        text = _item_text(item)
+        if not text or _looks_like_boilerplate(text):
+            return None
+        return ParsedEvent(seq, "user", "prompt", content=text, ts=ts)
+
+    if itype == "AgentMessage":
+        text = _item_text(item)
+        if not text:
+            return None
+        return ParsedEvent(seq, "assistant", "reply", content=text, ts=ts)
+
+    if itype == "CommandExecution":
+        command = item.get("command")
+        if isinstance(command, list):
+            command = " ".join(str(part) for part in command)
+        command = " ".join(str(command or "").split())
+        if not command:
+            return None
+        return ParsedEvent(seq, "assistant", "tool_use", content=f"$ {command[:400]}",
+                           commands=[command[:400]], ts=ts)
+
+    if itype == "FileChange":
+        changes = item.get("changes")
+        files = list(changes.keys()) if isinstance(changes, dict) else []
+        if not files:
+            return None
+        return ParsedEvent(seq, "assistant", "tool_use",
+                           content="Edited: " + ", ".join(files[:8]), files=files, ts=ts)
+
+    if itype == "Extension":
+        query = item.get("query") or (item.get("action") or {}).get("query")
+        if not query:
+            return None
+        return ParsedEvent(seq, "assistant", "tool_use", content=f"web.search: {str(query)[:200]}", ts=ts)
+
+    if itype == "McpToolCall":
+        label = f"{item.get('server', 'mcp')}.{item.get('tool', 'call')}"
+        return ParsedEvent(seq, "assistant", "tool_use", content=f"MCP {label}", ts=ts)
+
+    return None
+
+
+_ITEM_TEXT_TYPES = {"text", "Text", "input_text", "output_text"}
+
+
+def _item_text(item: dict[str, Any]) -> str:
+    content = item.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    parts: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in _ITEM_TEXT_TYPES:
+                parts.append(str(block.get("text", "")).strip())
+    return "\n".join(part for part in parts if part).strip()
 
 
 def _strip_file_uri(value: Any) -> str | None:
