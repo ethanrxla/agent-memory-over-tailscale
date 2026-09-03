@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_memory.projects import derive_project  # noqa: E402
 from agent_memory.redact import path_is_denied, redact_text  # noqa: E402
-from watcher import claude_code, codex  # noqa: E402
+from watcher import claude_code, codex, history  # noqa: E402
 from watcher.common import ParsedEvent, ParsedSession  # noqa: E402
 from watcher.hub_client import HubClient  # noqa: E402
 from watcher.spool import Spool  # noqa: E402
@@ -177,6 +177,47 @@ def deliver(spool: Spool, client: HubClient, batch_size: int = 200) -> dict[str,
     return stats
 
 
+def ingest_history(spool: Spool, roots: dict[str, list[Path]]) -> int:
+    """Recover orphaned sessions (transcript gone, prompts survive in history).
+
+    Prompt-only and lower fidelity, so marked source=history. Skips any session
+    that has a transcript, so nothing already ingested is duplicated.
+    """
+    disk_ids: set[str] = set()
+    for paths in roots.values():
+        for path in paths:
+            if path.parent.name == "subagents":
+                disk_ids.add(path.parent.parent.name)
+            elif path.name.startswith("rollout-"):
+                sess, _ = codex.parse_transcript(path)
+                disk_ids.add(sess.session_id)
+            else:
+                disk_ids.add(path.stem)
+
+    enqueued = 0
+    for session, events in history.orphan_sessions(disk_ids):
+        project = derive_project(session.cwd)
+        payload = {
+            "session_id": session.session_id,
+            "project_key": project["project_key"],
+            "display_name": project["display_name"],
+            "repo_root": project["repo_root"],
+            "git_remote": project["git_remote"],
+            "tool": session.tool,
+            "cwd": session.cwd,
+            "ai_title": redact_text(session.ai_title) if session.ai_title else None,
+            "last_prompt": redact_text(session.last_prompt) if session.last_prompt else None,
+            "started_at": session.started_at,
+            "metadata": {"source": "history", "fidelity": "prompts_only"},
+        }
+        for event in events:
+            body = {"session": payload, "event": _redact_event(event)}
+            if spool.enqueue(session.session_id, event.seq, body):
+                enqueued += 1
+    spool.commit()
+    return enqueued
+
+
 def run_cycle(roots: dict[str, list[Path]], spool: Spool, client: HubClient,
               device: str, agent_id: str | None, deny: list[str]) -> dict[str, int]:
     enqueued = 0
@@ -214,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--codex-root", type=Path, default=None)
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
     parser.add_argument("--backfill", action="store_true", help="Deliver everything on disk, then exit")
+    parser.add_argument("--no-history", action="store_true",
+                        help="Skip recovering orphaned sessions from prompt history during backfill")
     args = parser.parse_args(argv)
 
     deny = list(args.deny) + [p for p in os.getenv("AGENT_MEMORY_DENY", "").split(":") if p.strip()]
@@ -235,6 +278,11 @@ def main(argv: list[str] | None = None) -> int:
         while True:
             roots = discover(args.claude_root, args.codex_root)
             total = sum(len(v) for v in roots.values())
+            # On backfill, also recover orphaned sessions from prompt history.
+            if args.backfill and not args.no_history:
+                hist = ingest_history(spool, roots)
+                if hist:
+                    print(f"[watcher] recovered {hist} prompt events from orphaned history sessions", flush=True)
             result = run_cycle(roots, spool, client, args.device, args.agent_id, deny)
             print(
                 f"[watcher] files={total} enqueued={result['enqueued']} "
