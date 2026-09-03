@@ -45,9 +45,17 @@ def _looks_like_boilerplate(text: str) -> bool:
 
 
 def parse_transcript(path: Path) -> tuple[ParsedSession | None, list[ParsedEvent]]:
+    """Parse a Codex rollout in either schema.
+
+    Newer rollouts emit event_msg/item_completed items; older ones (pre-2026-08)
+    emit event_msg/user_message, event_msg/agent_message, and
+    response_item/function_call. We collect both into separate buckets in one
+    pass and return whichever the file actually used, so a schema change never
+    silently drops a whole session.
+    """
     session: ParsedSession | None = None
-    events: list[ParsedEvent] = []
-    seq = 0
+    new_events: list[ParsedEvent] = []   # item_completed schema
+    old_events: list[ParsedEvent] = []   # user_message/agent_message schema
 
     for raw in _iter_lines(path):
         rtype = raw.get("type")
@@ -55,37 +63,73 @@ def parse_transcript(path: Path) -> tuple[ParsedSession | None, list[ParsedEvent
         if not isinstance(payload, dict):
             continue
         ts = raw.get("timestamp")
+        ptype = payload.get("type")
 
         if rtype == "session_meta":
             session = ParsedSession(
-                session_id=payload.get("session_id") or path.stem,
+                session_id=payload.get("session_id") or payload.get("id") or path.stem,
                 tool="codex",
                 cwd=_strip_file_uri(payload.get("cwd")),
                 started_at=payload.get("timestamp") or ts,
             )
             continue
-
         if rtype == "turn_context" and session is not None and not session.cwd:
             session.cwd = _strip_file_uri(payload.get("cwd"))
             continue
 
-        if rtype != "event_msg" or payload.get("type") != "item_completed":
+        # --- newer schema ---
+        if rtype == "event_msg" and ptype == "item_completed":
+            item = payload.get("item")
+            if isinstance(item, dict):
+                event = _item_to_event(item, len(new_events), ts)
+                if event is not None:
+                    new_events.append(event)
             continue
 
-        item = payload.get("item")
-        if not isinstance(item, dict):
+        # --- older schema ---
+        if rtype == "event_msg" and ptype == "user_message":
+            text = str(payload.get("message") or "").strip()
+            if text and not _looks_like_boilerplate(text):
+                old_events.append(ParsedEvent(len(old_events), "user", "prompt", content=text, ts=ts))
             continue
-        event = _item_to_event(item, seq, ts)
-        if event is None:
+        if rtype == "event_msg" and ptype == "agent_message":
+            text = str(payload.get("message") or "").strip()
+            if text:
+                old_events.append(ParsedEvent(len(old_events), "assistant", "reply", content=text, ts=ts))
             continue
-        events.append(event)
-        if event.kind == "prompt" and session is not None:
-            session.last_prompt = event.content
-        seq += 1
+        if rtype == "response_item" and ptype == "function_call":
+            event = _function_call_event(payload, len(old_events), ts)
+            if event is not None:
+                old_events.append(event)
+            continue
 
+    events = new_events if new_events else old_events
     if session is None:
         session = ParsedSession(session_id=path.stem, tool="codex")
+    for event in events:
+        if event.kind == "prompt":
+            session.last_prompt = event.content
     return session, events
+
+
+def _function_call_event(payload: dict[str, Any], seq: int, ts: str | None) -> ParsedEvent | None:
+    """Old-schema tool call. exec_command carries the shell command in its args."""
+    name = payload.get("name")
+    args = payload.get("arguments")
+    if name == "exec_command" and args:
+        try:
+            cmd = json.loads(args).get("cmd")
+        except (json.JSONDecodeError, TypeError):
+            cmd = None
+        if cmd:
+            if isinstance(cmd, list):
+                cmd = " ".join(str(c) for c in cmd)
+            cmd = " ".join(str(cmd).split())
+            return ParsedEvent(seq, "assistant", "tool_use", content=f"$ {cmd[:400]}",
+                               commands=[cmd[:400]], ts=ts)
+    if name:
+        return ParsedEvent(seq, "assistant", "tool_use", content=f"{name} called", ts=ts)
+    return None
 
 
 def _item_to_event(item: dict[str, Any], seq: int, ts: str | None) -> ParsedEvent | None:

@@ -220,3 +220,24 @@ def test_subagent_transcripts_fold_into_parent_as_sidechain(tmp_path: Path, clie
         conn.close()
     # The extractive summary is built from non-sidechain events only.
     assert "explore the auth module" not in result["summary"]
+
+
+def test_codex_parses_old_user_message_schema(tmp_path: Path) -> None:
+    """Pre-2026-08 rollouts use user_message/agent_message/function_call, not item_completed."""
+    lines = [
+        {"type": "session_meta", "timestamp": "t0", "payload": {"session_id": "old-cx", "cwd": "/home/x/proj"}},
+        {"type": "event_msg", "timestamp": "t1", "payload": {"type": "user_message",
+         "message": "install docker desktop on pop os"}},
+        {"type": "event_msg", "timestamp": "t2", "payload": {"type": "agent_message",
+         "message": "I'll check the distro and kernel first."}},
+        {"type": "response_item", "timestamp": "t3", "payload": {"type": "function_call",
+         "name": "exec_command", "arguments": "{\"cmd\":\"cat /etc/os-release\",\"workdir\":\"/home/x/proj\"}"}},
+    ]
+    path = tmp_path / "rollout-2026-04-06T00-00-00-old-cx.jsonl"
+    _write_transcript(path, lines)
+    session, events = codex.parse_transcript(path)
+    assert session.tool == "codex"
+    assert session.cwd == "/home/x/proj"
+    kinds = [e.kind for e in events]
+    assert kinds.count("prompt") == 1 and kinds.count("reply") == 1
+    assert any("cat /etc/os-release" in c for e in events for c in e.commands)
