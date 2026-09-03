@@ -2,74 +2,73 @@
 name: agent-memory
 description: >-
   Shared, project-scoped memory across all your Claude and Codex sessions and
-  devices. Use at the START of any coding session to load a compact brief of
-  what prior sessions did in THIS project, and mid-task to search past work by
-  meaning instead of re-reading transcripts. Triggers whenever you are picking
-  up existing work, wondering "have we done this before / why did we choose X",
-  handing off between agents, or want to avoid re-deriving context you already
-  established elsewhere.
+  devices. Use at the START of a coding session to load a compact brief of what
+  prior sessions did in THIS project, and mid-task to search past work by
+  meaning instead of re-reading transcripts. Triggers when picking up existing
+  work, wondering "have we done this before / why did we choose X", handing off
+  between agents, or to avoid re-deriving context established elsewhere.
 ---
 
 # Shared Agent Memory
 
-One memory store, shared by every Claude/Codex session on your Tailscale
-network. It fixes the expensive habit of re-reading a whole chat to recover
-context: instead you pull a short, project-scoped brief and search prior work
-semantically. It also lets independent agents on different devices see each
-other's progress on the same project.
+One memory store shared by every Claude/Codex session on your Tailscale
+network. Instead of re-reading a whole transcript to recover context, you pull a
+short, project-scoped brief and search prior work semantically. It also lets
+independent agents on different devices see each other's progress.
 
-## The one rule that saves the most tokens
+All commands go through the bundled `memory.py` (stdlib only — no dependencies).
+Run it from this skill's directory. It reads the hub URL from `AGENT_MEMORY_URL`
+(default `http://127.0.0.1:8787`; on other devices set it to the hub, e.g.
+`http://pop-os.tailf11891.ts.net:8787`).
 
-**At the start of a coding session, call `get_project_brief` once, passing the
-current working directory as `cwd`.** You get back — scoped to *this* project
-only — recent session summaries, open threads, and locked-in decisions, for a
-few hundred tokens. That is almost always cheaper and more accurate than
-reading files or scrollback to reconstruct where things stand.
+## At the start of a coding session — do this first
 
-```
-get_project_brief(cwd="/home/you/project")
+```bash
+python3 memory.py brief
 ```
 
-If the brief says there is no prior context, start fresh — do not invent a
-backstory.
+Scope is derived automatically from the current directory (git remote, else
+path), so the brief covers only THIS project: recent session summaries,
+decisions in effect, and open threads — usually a few hundred tokens, far
+cheaper than reading files or scrollback. If it reports no sessions, it lists
+related projects; otherwise start fresh — don't invent backstory.
 
 ## During the task
 
-- **`search_memory(query, cwd=...)`** — semantic + keyword search, automatically
-  scoped to the current project so unrelated work never pollutes results. Use it
-  for "have we hit this before", "why did we choose X", "where is Y configured".
-  If it returns *no relevant context*, trust that and proceed — a forced weak
-  match is what sends you off track.
-- **`open_threads(cwd=...)`** — the unfinished work items across this project's
-  sessions.
-- **`list_sessions(cwd=...)` / `get_session(session_id)`** — see what other
-  sessions (yours or another agent's) did; fetch one in `summary` or `full`
-  detail.
+```bash
+python3 memory.py search "why did we drop the shannon runtime"   # this project
+python3 memory.py threads                                        # unfinished work
+python3 memory.py sessions                                       # recent sessions here
+python3 memory.py global-search "nvidia nim rate limit"          # ALL projects
+```
 
-## What to write back
+Search is semantic + keyword, scoped to the current project by default. If it
+returns "No relevant prior context", trust that and proceed — a forced weak
+match is what sends you off track. Widen only deliberately with `global-search`
+or `--scope linked`.
 
-- **`record_decision(...)`** — when you make a choice future work must respect
-  (a library, an architecture, a "we tried X and it failed"), pin it with its
-  rationale. This is what stops the next agent re-litigating settled questions.
-- **`publish_memory(...)`** — durable facts worth keeping: paths, commands,
-  hashes, ports, repro steps, environment quirks. Dense and specific.
+## When you make a decision worth keeping
 
-Most session context is captured automatically by the background watcher, so
-you rarely need to log routine activity by hand — reserve explicit writes for
-conclusions and decisions.
+```bash
+python3 memory.py decide "Use sqlite-vec, not Mongo" \
+  "Self-hosted Mongo has no vector search." \
+  --rationale "Keeps everything in one file on the tailnet."
+```
 
-## Scope: how unrelated work is kept out
-
-Every memory belongs to a `project_key` derived from the git remote (or path)
-of its `cwd`. Searches and briefs are confined to the current project by
-default. To deliberately look wider:
-
-- `scope="linked"` — also read projects you explicitly linked.
-- `scope="global"` — read everything (use sparingly; this is how cross-project
-  noise gets in).
+Pin choices future sessions must respect (a library, an architecture, a
+"we tried X and it failed"). This is what stops the next agent re-litigating
+settled questions. Routine activity is captured automatically by the watcher —
+reserve explicit writes for conclusions and decisions.
 
 ## Never store
 
-Secrets, API keys, tokens, or raw credentials — and never your hidden
-chain-of-thought. The watcher redacts known secret shapes on the source device,
-but do not rely on it: keep secrets out of what you write.
+Secrets, API keys, tokens, credentials — and never your hidden chain-of-thought.
+The watcher redacts known secret shapes on the source device, but don't rely on
+it: keep secrets out of what you write.
+
+## MCP alternative
+
+If your client has the `agent-memory` MCP server configured, the same
+operations are available as tools (`get_project_brief`, `search_memory`,
+`record_decision`, `list_sessions`, `open_threads`) — use those instead of the
+CLI when present. The CLI always works and needs no MCP setup.
