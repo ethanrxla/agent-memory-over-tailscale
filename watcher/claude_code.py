@@ -28,6 +28,17 @@ def find_transcripts(root: Path = DEFAULT_ROOT) -> list[Path]:
     return sorted(root.glob("*/*.jsonl"))
 
 
+def find_subagent_transcripts(root: Path = DEFAULT_ROOT) -> list[Path]:
+    """Sub-agent logs live at <project>/<session>/subagents/agent-*.jsonl.
+
+    They are the sidechain work of a parent session, not sessions in their own
+    right, so they are discovered separately and folded into the parent.
+    """
+    if not root.exists():
+        return []
+    return sorted(root.glob("*/*/subagents/*.jsonl"))
+
+
 def _text_blocks(content: Any) -> tuple[str, list[ParsedEvent]]:
     """Return (joined text, tool-use events) from a message content field."""
     if isinstance(content, str):

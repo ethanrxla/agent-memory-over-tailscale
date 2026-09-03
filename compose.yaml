@@ -11,7 +11,9 @@ services:
       AGENT_MEMORY_EMBED_MODEL: ${AGENT_MEMORY_EMBED_MODEL:-nvidia/nemotron-3-embed-1b}
       AGENT_MEMORY_SUMMARY_MODEL: ${AGENT_MEMORY_SUMMARY_MODEL:-moonshotai/kimi-k3}
     ports:
-      - "8787:8787"
+      # Keep the hub off the LAN. Remote agents reach it through Tailscale
+      # Serve, which applies tailnet identity before proxying to localhost.
+      - "127.0.0.1:8787:8787"
     volumes:
       - ./data:/data
     restart: unless-stopped

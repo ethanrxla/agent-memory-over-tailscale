@@ -56,10 +56,31 @@ def _session_payload(session: ParsedSession, device: str, agent_id: str | None) 
         "cwd": session.cwd,
         "git_branch": session.git_branch,
         "ai_title": session.ai_title,
-        "last_prompt": redact_text(session.last_prompt) if session.last_prompt else None,
+        # Match SessionUpsertRequest's bound so one unusually long operator
+        # message cannot block delivery of the entire durable spool.
+        "last_prompt": redact_text(session.last_prompt)[:4000] if session.last_prompt else None,
         "is_sidechain": session.is_sidechain,
         "started_at": session.started_at,
     }
+
+
+def _is_subagent(path: Path) -> bool:
+    return path.parent.name == "subagents"
+
+
+def _subagent_context(path: Path) -> tuple[str, int]:
+    """Return (parent_session_id, seq_base) for a sub-agent transcript.
+
+    The parent session id is the directory that owns the subagents folder. The
+    seq base spaces each sub-agent's events into their own range so they never
+    collide with the parent's events (base 0) or with each other on the
+    (session_id, seq) idempotency key. The base is derived from the file's
+    sorted position among its siblings, so re-runs are stable.
+    """
+    parent_id = path.parent.parent.name
+    siblings = sorted(p.name for p in path.parent.glob("*.jsonl"))
+    ordinal = siblings.index(path.name) if path.name in siblings else 0
+    return parent_id, (ordinal + 1) * 1_000_000
 
 
 def scan_file(path: Path, spool: Spool, device: str, agent_id: str | None, deny: list[str]) -> int:
@@ -85,6 +106,18 @@ def scan_file(path: Path, spool: Spool, device: str, agent_id: str | None, deny:
     session, events = parser.parse_transcript(path)
     if session is None:
         return 0
+
+    if _is_subagent(path):
+        # Fold sub-agent work into the parent session as sidechain events:
+        # searchable, but excluded from summaries and the graph.
+        parent_id, seq_base = _subagent_context(path)
+        session.session_id = parent_id
+        session.is_sidechain = False  # the parent session is not itself sidechain
+        session.ai_title = None       # never overwrite the parent's title/prompt
+        session.last_prompt = None
+        for event in events:
+            event.is_sidechain = True
+            event.seq += seq_base
 
     session_payload = _session_payload(session, device, agent_id)
     session_id = session_payload["session_id"]
@@ -120,6 +153,9 @@ def deliver(spool: Spool, client: HubClient, batch_size: int = 200) -> dict[str,
             import json as _json
 
             payload = _json.loads(row["payload"])
+            last_prompt = payload["session"].get("last_prompt")
+            if isinstance(last_prompt, str):
+                payload["session"]["last_prompt"] = last_prompt[:4000]
             session_id = row["session_id"]
             bucket = grouped.setdefault(session_id, {"session": payload["session"], "events": []})
             bucket["events"].append(payload["event"])
@@ -154,7 +190,12 @@ def run_cycle(roots: dict[str, list[Path]], spool: Spool, client: HubClient,
 
 def discover(claude_root: Path | None, codex_root: Path | None) -> dict[str, list[Path]]:
     roots: dict[str, list[Path]] = {}
-    roots["claude"] = claude_code.find_transcripts(claude_root) if claude_root else claude_code.find_transcripts()
+    if claude_root:
+        roots["claude"] = claude_code.find_transcripts(claude_root)
+        roots["claude_subagents"] = claude_code.find_subagent_transcripts(claude_root)
+    else:
+        roots["claude"] = claude_code.find_transcripts()
+        roots["claude_subagents"] = claude_code.find_subagent_transcripts()
     roots["codex"] = codex.find_transcripts(codex_root) if codex_root else codex.find_transcripts()
     return roots
 

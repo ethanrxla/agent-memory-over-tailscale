@@ -159,3 +159,64 @@ def test_claude_parser_skips_slash_command_boilerplate(tmp_path: Path) -> None:
     prompts = [e for e in events if e.kind == "prompt"]
     assert len(prompts) == 1
     assert prompts[0].content == "actually refactor the auth module"
+
+
+def test_subagent_transcripts_fold_into_parent_as_sidechain(tmp_path: Path, client: TestClient) -> None:
+    """Sub-agent logs enrich the parent session without becoming their own."""
+    proj = tmp_path / "-home-x-proj"
+    parent_id = "11111111-2222-3333-4444-555555555555"
+    # Parent session transcript.
+    _write_transcript(proj / f"{parent_id}.jsonl", [
+        {"type": "user", "sessionId": parent_id, "cwd": "/home/x/proj", "timestamp": "t0",
+         "message": {"role": "user", "content": "build the parser"}},
+        {"type": "ai-title", "sessionId": parent_id, "aiTitle": "build the parser"},
+        {"type": "assistant", "sessionId": parent_id, "timestamp": "t1",
+         "message": {"role": "assistant", "content": [{"type": "text", "text": "on it"}]}},
+    ])
+    # Two sub-agent transcripts under <parent>/subagents/.
+    subdir = proj / parent_id / "subagents"
+    for name, text in [("agent-aaa.jsonl", "explore the auth module"),
+                       ("agent-bbb.jsonl", "explore the db layer")]:
+        _write_transcript(subdir / name, [
+            {"type": "user", "sessionId": parent_id, "cwd": "/home/x/proj", "isSidechain": True,
+             "timestamp": "t2", "message": {"role": "user", "content": text}},
+            {"type": "assistant", "sessionId": parent_id, "isSidechain": True, "timestamp": "t3",
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "done: " + text}]}},
+        ])
+
+    spool = Spool(tmp_path / "spool.db")
+    for p in claude_code.find_transcripts(proj.parent) + claude_code.find_subagent_transcripts(proj.parent):
+        scan_file(p, spool, device="dev", agent_id=None, deny=[])
+
+    class _InProcess(HubClient):
+        def health(self_inner):  # noqa: N805
+            return True
+
+        def send_events(self_inner, session, events):  # noqa: N805
+            return client.post("/v1/sessions/events", json={"session": session, "events": events}).json()
+
+    deliver(spool, _InProcess("http://unused"))
+    spool.close()
+
+    # One session, enriched with the sub-agent events, all marked sidechain.
+    listing = client.get("/v1/sessions", params={"include_sidechain": True}).json()["sessions"]
+    assert len(listing) == 1
+    detail = client.get(f"/v1/sessions/{parent_id}", params={"detail": "full", "event_limit": 50}).json()
+    assert detail["session"]["title"] == "build the parser"  # parent title preserved
+    kinds = [(e["content"], e.get("kind")) for e in detail["events"]]
+    joined = " ".join(c for c, _ in kinds)
+    assert "explore the auth module" in joined
+    assert "explore the db layer" in joined
+
+    # Sub-agent content is sidechain, so it is excluded from the default brief.
+    from agent_memory.nim import NimClient
+    from agent_memory.summarize import generate_summary
+    ctx = client.app.state.ctx
+    conn = ctx.open()
+    try:
+        result = generate_summary(conn, ctx.config, NimClient(ctx.config), parent_id, tier="final")
+        conn.commit()
+    finally:
+        conn.close()
+    # The extractive summary is built from non-sidechain events only.
+    assert "explore the auth module" not in result["summary"]
