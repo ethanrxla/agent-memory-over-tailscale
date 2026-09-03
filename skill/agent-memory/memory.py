@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -175,7 +176,7 @@ def cmd_threads(a):
 
 def cmd_decide(a):
     pk = a.project_key or project_key(a.cwd)
-    agent = os.getenv("AGENT_MEMORY_AGENT_ID") or os.uname().nodename + "-agent"
+    agent = os.getenv("AGENT_MEMORY_AGENT_ID") or platform.node() + "-agent"
     body = {"agent_id": agent, "project_key": pk, "cwd": a.cwd,
             "title": a.title, "content": a.content, "rationale": a.rationale, "tags": []}
     # The hub requires the agent be registered before writing.

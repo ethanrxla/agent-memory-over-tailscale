@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import sys
 import time
 from dataclasses import asdict
@@ -204,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Agent memory transcript watcher")
     parser.add_argument("--backend-url", default=os.getenv("AGENT_MEMORY_URL", "http://127.0.0.1:8787"))
     parser.add_argument("--shared-key", default=os.getenv("AGENT_MEMORY_SHARED_KEY", ""))
-    parser.add_argument("--device", default=os.uname().nodename)
+    parser.add_argument("--device", default=platform.node())
     parser.add_argument("--agent-id", default=os.getenv("AGENT_MEMORY_AGENT_ID"))
     parser.add_argument("--spool", default=os.getenv("AGENT_MEMORY_SPOOL", str(DEFAULT_SPOOL)))
     parser.add_argument("--interval", type=float, default=float(os.getenv("AGENT_MEMORY_WATCH_INTERVAL", "20")))
