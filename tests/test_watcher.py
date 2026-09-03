@@ -55,17 +55,21 @@ def test_claude_parser_drops_noise_keeps_signal(tmp_path: Path) -> None:
 
 
 def test_codex_parser(tmp_path: Path) -> None:
+    # Current Codex CLI rollout format: flat event_msg payloads (user_message,
+    # agent_message, exec_command_end, patch_apply_end, ...), no item_completed
+    # wrapper. session_meta carries the session id under "id".
     lines = [
         {"type": "session_meta", "timestamp": "2026-08-30T10:00:00Z",
-         "payload": {"session_id": "cx-1", "cwd": "/home/x/proj"}},
-        {"type": "event_msg", "timestamp": "t1", "payload": {"type": "item_completed",
-         "item": {"type": "UserMessage", "content": [{"type": "text", "text": "fix the parser bug"}]}}},
-        {"type": "event_msg", "timestamp": "t2", "payload": {"type": "item_completed",
-         "item": {"type": "Reasoning", "raw_content": []}}},
-        {"type": "event_msg", "timestamp": "t3", "payload": {"type": "item_completed",
-         "item": {"type": "CommandExecution", "command": ["/bin/bash", "-lc", "pytest -q"]}}},
-        {"type": "event_msg", "timestamp": "t4", "payload": {"type": "item_completed",
-         "item": {"type": "FileChange", "changes": {"/home/x/proj/parser.py": {"type": "modify"}}}}},
+         "payload": {"id": "cx-1", "cwd": "/home/x/proj"}},
+        {"type": "event_msg", "timestamp": "t1",
+         "payload": {"type": "user_message", "message": "fix the parser bug"}},
+        {"type": "event_msg", "timestamp": "t2",
+         "payload": {"type": "token_count", "info": {}}},
+        {"type": "event_msg", "timestamp": "t3",
+         "payload": {"type": "exec_command_end", "command": ["/bin/bash", "-lc", "pytest -q"]}},
+        {"type": "event_msg", "timestamp": "t4",
+         "payload": {"type": "patch_apply_end",
+                     "changes": {"/home/x/proj/parser.py": {"type": "update"}}}},
     ]
     path = tmp_path / "rollout-2026-08-30T10-00-00-cx-1.jsonl"
     _write_transcript(path, lines)
@@ -75,7 +79,7 @@ def test_codex_parser(tmp_path: Path) -> None:
     assert session.cwd == "/home/x/proj"
     kinds = [e.kind for e in events]
     assert kinds.count("prompt") == 1
-    # Reasoning dropped; command + file change kept.
+    # token_count dropped; command + file change kept.
     assert any("pytest" in c for e in events for c in e.commands)
     assert "/home/x/proj/parser.py" in {f for e in events for f in e.files}
 

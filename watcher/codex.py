@@ -1,10 +1,13 @@
 """Parse Codex rollout transcripts into the common event stream.
 
 Rollouts live under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl. The first
-record is session_meta (session_id, cwd). The cleanest signal is the stream of
-``event_msg/item_completed`` records, whose item type tells us what happened;
-using those avoids double-counting the overlapping response_item/message
-records and skips developer/app-context boilerplate.
+record is session_meta (session id, cwd). Content comes from top-level
+``event_msg`` records -- current Codex CLI builds emit flat types like
+``user_message``, ``agent_message``, ``exec_command_end``, ``patch_apply_end``,
+``web_search_end`` and ``mcp_tool_call_end`` directly on the payload (no
+``item_completed`` wrapper), which is what this module reads. Reasoning,
+token-count, and turn-lifecycle records carry no durable retrieval signal and
+are dropped.
 """
 
 from __future__ import annotations
@@ -17,26 +20,11 @@ from .common import ParsedEvent, ParsedSession
 
 DEFAULT_ROOT = Path.home() / ".codex" / "sessions"
 
-# Item content can be [{type:text|Text|input_text|output_text, text:...}].
-_TEXT_TYPES = {"text", "Text", "input_text", "output_text"}
-
 
 def find_transcripts(root: Path = DEFAULT_ROOT) -> list[Path]:
     if not root.exists():
         return []
     return sorted(root.glob("**/rollout-*.jsonl"))
-
-
-def _item_text(item: dict[str, Any]) -> str:
-    content = item.get("content")
-    if isinstance(content, str):
-        return content.strip()
-    parts: list[str] = []
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") in _TEXT_TYPES:
-                parts.append(str(block.get("text", "")).strip())
-    return "\n".join(part for part in parts if part).strip()
 
 
 def _looks_like_boilerplate(text: str) -> bool:
@@ -58,7 +46,7 @@ def parse_transcript(path: Path) -> tuple[ParsedSession | None, list[ParsedEvent
 
         if rtype == "session_meta":
             session = ParsedSession(
-                session_id=payload.get("session_id") or path.stem,
+                session_id=payload.get("id") or payload.get("session_id") or path.stem,
                 tool="codex",
                 cwd=_strip_file_uri(payload.get("cwd")),
                 started_at=payload.get("timestamp") or ts,
@@ -69,13 +57,10 @@ def parse_transcript(path: Path) -> tuple[ParsedSession | None, list[ParsedEvent
             session.cwd = _strip_file_uri(payload.get("cwd"))
             continue
 
-        if rtype != "event_msg" or payload.get("type") != "item_completed":
+        if rtype != "event_msg":
             continue
 
-        item = payload.get("item")
-        if not isinstance(item, dict):
-            continue
-        event = _item_to_event(item, seq, ts)
+        event = _event_to_event(payload, seq, ts)
         if event is None:
             continue
         events.append(event)
@@ -88,23 +73,23 @@ def parse_transcript(path: Path) -> tuple[ParsedSession | None, list[ParsedEvent
     return session, events
 
 
-def _item_to_event(item: dict[str, Any], seq: int, ts: str | None) -> ParsedEvent | None:
-    itype = item.get("type")
+def _event_to_event(payload: dict[str, Any], seq: int, ts: str | None) -> ParsedEvent | None:
+    etype = payload.get("type")
 
-    if itype == "UserMessage":
-        text = _item_text(item)
+    if etype == "user_message":
+        text = str(payload.get("message", "")).strip()
         if not text or _looks_like_boilerplate(text):
             return None
         return ParsedEvent(seq, "user", "prompt", content=text, ts=ts)
 
-    if itype == "AgentMessage":
-        text = _item_text(item)
+    if etype == "agent_message":
+        text = str(payload.get("message", "")).strip()
         if not text:
             return None
         return ParsedEvent(seq, "assistant", "reply", content=text, ts=ts)
 
-    if itype == "CommandExecution":
-        command = item.get("command")
+    if etype == "exec_command_end":
+        command = payload.get("command")
         if isinstance(command, list):
             command = " ".join(str(part) for part in command)
         command = " ".join(str(command or "").split())
@@ -113,26 +98,28 @@ def _item_to_event(item: dict[str, Any], seq: int, ts: str | None) -> ParsedEven
         return ParsedEvent(seq, "assistant", "tool_use", content=f"$ {command[:400]}",
                            commands=[command[:400]], ts=ts)
 
-    if itype == "FileChange":
-        changes = item.get("changes")
+    if etype == "patch_apply_end":
+        changes = payload.get("changes")
         files = list(changes.keys()) if isinstance(changes, dict) else []
         if not files:
             return None
         return ParsedEvent(seq, "assistant", "tool_use",
                            content="Edited: " + ", ".join(files[:8]), files=files, ts=ts)
 
-    if itype == "Extension":
-        query = item.get("query") or (item.get("action") or {}).get("query")
+    if etype == "web_search_end":
+        query = payload.get("query") or (payload.get("action") or {}).get("query")
         if not query:
             return None
         return ParsedEvent(seq, "assistant", "tool_use",
                            content=f"web.search: {str(query)[:200]}", ts=ts)
 
-    if itype == "McpToolCall":
-        label = f"{item.get('server', 'mcp')}.{item.get('tool', 'call')}"
+    if etype == "mcp_tool_call_end":
+        invocation = payload.get("invocation") or {}
+        label = f"{invocation.get('server', 'mcp')}.{invocation.get('tool', 'call')}"
         return ParsedEvent(seq, "assistant", "tool_use", content=f"MCP {label}", ts=ts)
 
-    # Reasoning and everything else: dropped.
+    # task_started/task_complete/token_count/context_compacted/turn_aborted/
+    # view_image_tool_call and everything else: dropped.
     return None
 
 
