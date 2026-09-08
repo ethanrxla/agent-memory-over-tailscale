@@ -106,6 +106,14 @@ class Config:
     rrf_k: int = field(default_factory=lambda: _env_int("AGENT_MEMORY_RRF_K", 60))
     brief_token_budget: int = field(default_factory=lambda: _env_int("AGENT_MEMORY_BRIEF_TOKENS", 500))
 
+    # The URL other devices reach this hub on. Baked into the served installer
+    # so a device can pull the skill without being told the address twice.
+    public_url: str = field(
+        default_factory=lambda: _env_str(
+            "AGENT_MEMORY_PUBLIC_URL", "http://pop-os.tailf11891.ts.net:8787"
+        )
+    )
+
     # Background worker.
     worker_enabled: bool = field(default_factory=lambda: _env_bool("AGENT_MEMORY_WORKER", True))
     worker_interval: float = field(default_factory=lambda: _env_float("AGENT_MEMORY_WORKER_INTERVAL", 15.0))
