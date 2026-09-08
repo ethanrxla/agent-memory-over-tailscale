@@ -138,7 +138,11 @@ class AgentMemoryMcpServer:
                 "description": (
                     "Call ONCE at the start of a session. Returns a compact, project-scoped brief: "
                     "recent session summaries, open threads, and locked-in decisions for THIS project. "
-                    "Far cheaper than re-reading a transcript and keeps you from drifting off track."
+                    "Far cheaper than re-reading a transcript and keeps you from drifting off track. "
+                    "If it reports no prior sessions, DO NOT conclude the work is new: check the "
+                    "related_projects it returns (the same project reached from another checkout or "
+                    "machine has a different key) by calling this tool again with that project_key, "
+                    "or search_memory across all projects."
                 ),
                 "inputSchema": {
                     "type": "object",

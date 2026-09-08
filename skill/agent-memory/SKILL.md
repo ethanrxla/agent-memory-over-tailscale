@@ -30,8 +30,23 @@ python3 memory.py brief
 Scope is derived automatically from the current directory (git remote, else
 path), so the brief covers only THIS project: recent session summaries,
 decisions in effect, and open threads — usually a few hundred tokens, far
-cheaper than reading files or scrollback. If it reports no sessions, it lists
-related projects; otherwise start fresh — don't invent backstory.
+cheaper than reading files or scrollback.
+
+**"No prior sessions recorded" does not mean the work is new.** The project key
+is a hard partition, so the same project reached from another checkout, another
+parent directory, or another machine lands under a different key — a plugin
+built on Windows under `path:C:\Users\you` is invisible from a
+`/Volumes/Drive/Thing-build` folder on a Mac. When the brief reports no
+sessions it prints **Related projects with recorded sessions**; check those
+before concluding there is no history:
+
+```bash
+python3 memory.py brief --project-key "<key it suggested>"
+python3 memory.py global-search "<the thing you're looking for>"
+```
+
+Only after both come back empty should you start fresh — and then don't invent
+backstory.
 
 ## During the task
 

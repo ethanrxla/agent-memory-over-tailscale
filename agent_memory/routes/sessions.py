@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from ..context import AppContext
 from ..models import ProjectLinkRequest, SessionEventsRequest, SessionUpsertRequest
 from ..store import insert_events, upsert_project, upsert_session, utc_now
+from ..projects import search_seed
 from ..summarize import project_brief
 
 
@@ -218,11 +219,17 @@ def register(app: FastAPI, ctx: AppContext) -> None:
         token_budget: int | None = Query(default=None, ge=100, le=4000),
         _: None = Depends(ctx.require_key_dep()),
     ) -> dict[str, Any]:
+        # Embedding the project name is best-effort and only matters when the
+        # brief is empty: it is what finds the same project recorded under a
+        # different key on another machine. Without it the hint falls back to
+        # keyword matching.
+        vector = ctx.query_vector(search_seed(project_key))
         conn = ctx.open()
         try:
             return project_brief(
                 conn, ctx.config, project_key,
                 token_budget=token_budget, max_sessions=max_sessions, branch=branch,
+                query_vector=vector,
             )
         finally:
             conn.close()

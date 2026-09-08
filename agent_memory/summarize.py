@@ -11,10 +11,12 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from types import SimpleNamespace
 from typing import Any
 
 from .config import Config
 from .nim import NimClient
+from .projects import search_seed
 from .store import index_chunks, utc_now
 from .text import estimate_tokens, truncate_tokens
 
@@ -277,6 +279,101 @@ def generate_summary(
     return result
 
 
+# Below this a hit is noise. A forced weak match is what sends an agent off
+# track, so no hint at all beats a confident wrong one.
+RELATED_MIN_SCORE = 0.4
+MAX_RELATED = 6
+
+
+def _lexical_related(conn: sqlite3.Connection, project_key: str) -> dict[str, int]:
+    """Neighbours whose key overlaps this one as a path prefix or name.
+
+    Catches the common local case: a git subdirectory and its loose parent are
+    distinct keys even though they are the same work.
+    """
+    raw = project_key.split(":", 1)[1] if project_key.startswith("path:") else project_key
+    raw = raw.replace("\\", "/").rstrip("/").lower()
+    base = raw.rsplit("/", 1)[-1]
+    hits: dict[str, int] = {}
+    for row in conn.execute(
+        """SELECT p.project_key AS project_key,
+                   (SELECT COUNT(*) FROM sessions WHERE project_key = p.project_key)
+                     AS session_count
+            FROM projects p"""
+    ):
+        if not row["session_count"]:
+            continue
+        other = row["project_key"]
+        if other == project_key:
+            continue
+        norm = (other.split(":", 1)[1] if other.startswith("path:") else other)
+        norm = norm.replace("\\", "/").rstrip("/").lower()
+        if norm.startswith(raw + "/") or raw.startswith(norm + "/") or (base and base in norm):
+            hits[other] = row["session_count"]
+    return hits
+
+
+def related_projects(
+    conn: sqlite3.Connection,
+    config: Config,
+    project_key: str,
+    *,
+    query_vector: list[float] | None = None,
+) -> list[dict[str, Any]]:
+    """Projects that plausibly hold this project's history.
+
+    Two passes, because they fail in different places. Lexical catches
+    parent/child paths on one machine. Semantic catches the case lexical cannot
+    see at all -- the same project on another device, where the keys share no
+    substring (a plugin built under ``C:\\Users\\theif`` is invisible from a
+    ``/Volumes/Drive/Thing-build`` checkout) and only meaning connects them.
+    """
+    from .retrieval import search as run_search  # local: retrieval imports this module
+
+    counts = {
+        row["project_key"]: row["session_count"]
+        for row in conn.execute(
+            """SELECT p.project_key AS project_key,
+                   (SELECT COUNT(*) FROM sessions WHERE project_key = p.project_key)
+                     AS session_count
+            FROM projects p"""
+        )
+    }
+    found: dict[str, tuple[float, str]] = {}
+
+    for key, count in _lexical_related(conn, project_key).items():
+        found[key] = (float(count), "name/path match")
+
+    seed = search_seed(project_key)
+    if seed:
+        req = SimpleNamespace(
+            query=seed, project_key=None, scope="global",
+            limit=20, min_score=RELATED_MIN_SCORE,
+        )
+        try:
+            results = run_search(conn, config, req, query_vector=query_vector)["results"]
+        except sqlite3.Error:
+            results = []
+        for r in results:
+            key, score = r["project_key"], float(r.get("relevance") or 0.0)
+            if key == project_key or score < RELATED_MIN_SCORE or not counts.get(key):
+                continue
+            if key in found and found[key][1] == "name/path match":
+                continue
+            if key not in found or score > found[key][0]:
+                found[key] = (score, f"semantic match {score:.2f}")
+
+    ordered = sorted(
+        found.items(),
+        key=lambda kv: (kv[1][1] != "name/path match", -kv[1][0]),
+    )
+    return [
+        {"project_key": k, "session_count": counts.get(k, 0), "why": why}
+        for k, (_, why) in ordered[:MAX_RELATED]
+        if counts.get(k)
+    ]
+
+
 def project_brief(
     conn: sqlite3.Connection,
     config: Config,
@@ -285,6 +382,7 @@ def project_brief(
     token_budget: int | None = None,
     max_sessions: int = 5,
     branch: str | None = None,
+    query_vector: list[float] | None = None,
 ) -> dict[str, Any]:
     """Compose the session-start brief, newest first, under a hard token budget."""
     budget = token_budget or config.brief_token_budget
@@ -359,6 +457,35 @@ def project_brief(
     open_threads = list(dict.fromkeys(t for t in open_threads if t.strip()))[:10]
     all_decisions = list(dict.fromkeys(d for d in all_decisions if d.strip()))[:10]
 
+    related = (
+        []
+        if session_blocks
+        else related_projects(conn, config, project_key, query_vector=query_vector)
+    )
+
+    message = None
+    if not session_blocks:
+        message = (
+            "No prior sessions recorded for this project. Start fresh; do not "
+            "assume prior context."
+        )
+        if related:
+            # Embedded in the message, not only in the structured field, so
+            # clients already installed on other devices surface it too.
+            listed = "\n".join(
+                f"  - {p['project_key']}  ({p['session_count']} sessions, {p['why']})"
+                for p in related
+            )
+            message = (
+                "No prior sessions recorded under this exact project key -- but the "
+                "same work may be recorded under another key (a different checkout, "
+                "parent directory, or machine). Check these before assuming this is "
+                "new work.\n\nRelated projects with recorded sessions:\n"
+                f"{listed}\n"
+                "Re-run the brief with one of those project keys, or search across "
+                "all projects, before starting fresh."
+            )
+
     return {
         "project_key": project_key,
         "display_name": project["display_name"] if project else project_key.rsplit("/", 1)[-1],
@@ -370,9 +497,6 @@ def project_brief(
         "session_count": len(session_blocks),
         "estimated_tokens": used,
         "token_budget": budget,
-        "message": (
-            None
-            if session_blocks
-            else "No prior sessions recorded for this project. Start fresh; do not assume prior context."
-        ),
+        "related_projects": related,
+        "message": message,
     }

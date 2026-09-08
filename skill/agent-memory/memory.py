@@ -80,17 +80,35 @@ def _q(pk: str) -> str:
     return urllib.parse.quote(pk, safe="")
 
 
-def _suggest_nearby(pk: str, cwd: str) -> None:
-    """When a project has no sessions, point at related projects.
+# Directory names carry scaffolding words that bury the distinctive part of the
+# name: "RedLamb-build" scores 0.20 against the sessions that built RedLamb,
+# while "RedLamb" scores 1.00. Strip these before seeding a search.
+_GENERIC_DIR_TOKENS = {
+    "bin", "build", "builds", "code", "debug", "dist", "final", "master", "new",
+    "obj", "old", "out", "output", "project", "projects", "release", "repo",
+    "repos", "source", "sources", "src", "target", "temp", "test", "tests",
+    "tmp", "workspace",
+}
 
-    project_key is derived from git remote or path, so a git subdirectory and
-    its loose parent are distinct projects. This surfaces the neighbours so the
-    agent is never left at a dead end.
+# Below this, a hit is noise. A forced weak match is what sends an agent off
+# track, so an empty hint is better than a confident wrong one.
+_NEARBY_MIN_SCORE = 0.4
+
+
+def _search_seed(cwd: str) -> str:
+    """Turn a directory name into a query the hub can actually match."""
+    base = os.path.basename(os.path.realpath(cwd))
+    parts = [p for p in re.split(r"[-_.\s]+", base) if p]
+    kept = [p for p in parts if p.lower() not in _GENERIC_DIR_TOKENS]
+    return " ".join(kept or parts)
+
+
+def _lexical_nearby(projects: list[dict], pk: str, cwd: str) -> list[str]:
+    """Neighbours whose key or repo root overlaps this path.
+
+    Catches the common local case -- a git subdirectory and its loose parent
+    are distinct project_keys even though they are the same work.
     """
-    try:
-        projects = request("GET", "/v1/projects?limit=200")["projects"]
-    except SystemExit:
-        return
     base = os.path.basename(os.path.realpath(cwd)).lower()
     path_frag = os.path.realpath(cwd).lower()
     hits = []
@@ -99,13 +117,72 @@ def _suggest_nearby(pk: str, cwd: str) -> None:
             continue
         key = pr["project_key"].lower()
         root = (pr.get("repo_root") or "").lower()
-        if base and (base in key or base in root) or (root and (root.startswith(path_frag) or path_frag.startswith(root))):
-            hits.append(pr)
-    if hits:
-        print("\nRelated projects with recorded sessions:")
-        for pr in sorted(hits, key=lambda x: -x["session_count"])[:6]:
-            print(f"  - {pr['project_key']}  ({pr['session_count']} sessions)")
-        print("Re-run with --project-key <key>, or use: memory.py global-search \"<query>\"")
+        name_match = bool(base) and (base in key or base in root)
+        path_match = bool(root) and (root.startswith(path_frag) or path_frag.startswith(root))
+        if name_match or path_match:
+            hits.append(pr["project_key"])
+    return hits
+
+
+def _semantic_nearby(pk: str, cwd: str) -> dict[str, float]:
+    """Neighbours that share no path or name overlap at all.
+
+    The same project worked on from another machine lands under an unrelated
+    key -- RedLamb built on Windows lives under path:C:\\Users\\theif, which
+    has no substring in common with a /Volumes/.../RedLamb-build checkout.
+    Only meaning connects them, so ask the hub by meaning.
+    """
+    seed = _search_seed(cwd)
+    if not seed:
+        return {}
+    try:
+        d = request("POST", "/v1/search", {
+            "query": seed, "project_key": None, "scope": "global",
+            "limit": 12, "min_score": _NEARBY_MIN_SCORE,
+        })
+    except SystemExit:
+        return {}
+    best: dict[str, float] = {}
+    for r in d.get("results") or []:
+        key, score = r["project_key"], r.get("relevance", 0.0)
+        if key == pk or score < _NEARBY_MIN_SCORE:
+            continue
+        best[key] = max(best.get(key, 0.0), score)
+    return best
+
+
+def _suggest_nearby(pk: str, cwd: str) -> None:
+    """When a project has no sessions, point at related projects.
+
+    project_key is derived from git remote or path, so the same work reached
+    from another checkout, another parent directory, or another machine is a
+    different project. This surfaces the neighbours so the agent is never left
+    at a dead end -- which is worse than no memory at all, because it reads as
+    "this is new work" and the agent starts inventing.
+    """
+    try:
+        projects = request("GET", "/v1/projects?limit=200")["projects"]
+    except SystemExit:
+        return
+    counts = {p["project_key"]: p.get("session_count", 0) for p in projects}
+
+    lexical = _lexical_nearby(projects, pk, cwd)
+    semantic = _semantic_nearby(pk, cwd)
+
+    ordered: list[tuple[str, str]] = []
+    for key in sorted(lexical, key=lambda k: -counts.get(k, 0)):
+        ordered.append((key, "name/path match"))
+    for key, score in sorted(semantic.items(), key=lambda kv: -kv[1]):
+        if key in lexical or not counts.get(key):
+            continue
+        ordered.append((key, f"semantic match {score:.2f}"))
+    if not ordered:
+        return
+
+    print("\nRelated projects with recorded sessions:")
+    for key, why in ordered[:6]:
+        print(f"  - {key}  ({counts.get(key, 0)} sessions, {why})")
+    print('Re-run with --project-key <key>, or use: memory.py global-search "<query>"')
 
 
 def cmd_brief(a):
@@ -117,7 +194,10 @@ def cmd_brief(a):
     d = request("GET", f"/v1/projects/{_q(pk)}/brief?{urllib.parse.urlencode(params)}")
     if d.get("message") and not d["sessions"]:
         print(f"[{d['display_name']}] {d['message']}")
-        _suggest_nearby(pk, a.cwd)
+        # Current hubs embed the hint in the message and return it structured.
+        # Only an older hub leaves the client to work it out.
+        if not d.get("related_projects"):
+            _suggest_nearby(pk, a.cwd)
         return
     print(f"# Project brief: {d['display_name']}  ({d['session_count']} recent sessions, ~{d['estimated_tokens']} tokens)")
     for s in d["sessions"]:
