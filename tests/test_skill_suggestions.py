@@ -202,3 +202,26 @@ def test_client_still_helps_against_an_older_hub(tmp_path, monkeypatch, capsys):
     _run_brief(monkeypatch, response, cwd)
 
     assert "path:/home/theif" in capsys.readouterr().out
+
+
+def test_client_prints_the_hint_on_a_non_empty_brief(monkeypatch, capsys):
+    """A young project gets both its own brief and the pointer to the rest."""
+    def request(method, path, payload=None):
+        return {
+            "display_name": "RedLamb-build", "session_count": 1,
+            "estimated_tokens": 263, "decisions": [], "open_threads": [],
+            "sessions": [{"session_id": "01a081a4", "title": None, "tool": "codex",
+                          "status": "idle", "summary": "only build artifacts, no source"}],
+            "message": "This project has little history under this key...\n"
+                       "Related projects with recorded sessions:\n  - path:/home/theif",
+            "related_projects": [{"project_key": "path:/home/theif",
+                                  "session_count": 4, "why": "semantic match 1.00"}],
+        }
+
+    monkeypatch.setattr(memory, "request", request)
+    memory.cmd_brief(argparse.Namespace(
+        project_key="path:/Volumes/T7 Shield/T7 shield/RedLamb-build", cwd=".", max_sessions=5))
+
+    out = capsys.readouterr().out
+    assert "only build artifacts" in out, "its own brief still shown"
+    assert "path:/home/theif" in out, "and the pointer to the real history"

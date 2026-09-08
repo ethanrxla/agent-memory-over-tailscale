@@ -284,6 +284,12 @@ def generate_summary(
 RELATED_MIN_SCORE = 0.4
 MAX_RELATED = 6
 
+# Keep pointing at neighbours until a project has a history of its own. Firing
+# only at zero sessions is brittle: one recorded session silences the hint
+# while the bulk of the work is still under another key, and the brief then
+# reads as authoritative when it is merely the first visit.
+RELATED_UNTIL_SESSIONS = 3
+
 
 def _lexical_related(conn: sqlite3.Connection, project_key: str) -> dict[str, int]:
     """Neighbours whose key overlaps this one as a path prefix or name.
@@ -458,17 +464,17 @@ def project_brief(
     all_decisions = list(dict.fromkeys(d for d in all_decisions if d.strip()))[:10]
 
     related = (
-        []
-        if session_blocks
-        else related_projects(conn, config, project_key, query_vector=query_vector)
+        related_projects(conn, config, project_key, query_vector=query_vector)
+        if len(session_blocks) < RELATED_UNTIL_SESSIONS
+        else []
     )
 
     message = None
-    if not session_blocks:
+    if not session_blocks or related:
         message = (
             "No prior sessions recorded for this project. Start fresh; do not "
             "assume prior context."
-        )
+        ) if not session_blocks else None
         if related:
             # Embedded in the message, not only in the structured field, so
             # clients already installed on other devices surface it too.
@@ -476,11 +482,19 @@ def project_brief(
                 f"  - {p['project_key']}  ({p['session_count']} sessions, {p['why']})"
                 for p in related
             )
-            message = (
+            lead = (
                 "No prior sessions recorded under this exact project key -- but the "
                 "same work may be recorded under another key (a different checkout, "
                 "parent directory, or machine). Check these before assuming this is "
-                "new work.\n\nRelated projects with recorded sessions:\n"
+                "new work."
+                if not session_blocks
+                else "This project has little history under this key, and more of it "
+                "may be recorded under another one (a different checkout, parent "
+                "directory, or machine). The brief above may be only a first visit, "
+                "not the whole story."
+            )
+            message = (
+                f"{lead}\n\nRelated projects with recorded sessions:\n"
                 f"{listed}\n"
                 "Re-run the brief with one of those project keys, or search across "
                 "all projects, before starting fresh."

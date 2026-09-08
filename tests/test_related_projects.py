@@ -140,3 +140,38 @@ def test_empty_projects_are_not_suggested(client: TestClient) -> None:
 
     brief = client.get(f"/v1/projects/{MAC}/brief").json()
     assert all(p["session_count"] > 0 for p in brief["related_projects"])
+
+
+# --- a young project is still a fragmented one -----------------------------
+#
+# Firing the hint only at exactly zero sessions is brittle: once a project
+# records one session of its own it goes silent, even though the bulk of the
+# history is still under another key. That is worse than the empty case,
+# because the brief now reads as authoritative. RedLamb hit exactly this --
+# the one recorded session concluded "no source here, ask the user", and
+# without the hint the next agent inherits that dead end as fact.
+
+def test_hint_survives_the_projects_first_session(client: TestClient) -> None:
+    register(client)
+    _seed_session(client, WSL, "s-wsl", "RedLamb JUCE plugin DimensionCore orbit rings")
+    _seed_session(client, MAC, "s-mac", "RedLamb build artifacts only, no source found here")
+
+    brief = client.get(f"/v1/projects/{MAC}/brief").json()
+
+    assert brief["session_count"] == 1, "its own session is still returned"
+    keys = {p["project_key"] for p in brief["related_projects"]}
+    assert WSL in keys, "the key holding the real history must still be named"
+    assert "Related projects" in (brief["message"] or ""), "clients render message"
+
+
+def test_hint_stops_once_a_project_is_established(client: TestClient) -> None:
+    """An established project has its own history; neighbours are just noise."""
+    register(client)
+    _seed_session(client, WSL, "s-wsl", "RedLamb JUCE plugin orbit rings")
+    for i in range(4):
+        _seed_session(client, MAC, f"s-mac-{i}", "RedLamb build and packaging work")
+
+    brief = client.get(f"/v1/projects/{MAC}/brief").json()
+
+    assert brief["related_projects"] == []
+    assert brief["message"] is None

@@ -211,6 +211,10 @@ def cmd_brief(a):
         print("\n## Open threads")
         for x in d["open_threads"]:
             print(f"  - {x}")
+    if d.get("related_projects") and d.get("message"):
+        # A young project: its own brief is real but probably partial, and the
+        # rest of the history sits under another key.
+        print(f"\n## Heads-up\n{d['message']}")
 
 
 def _print_results(d):
