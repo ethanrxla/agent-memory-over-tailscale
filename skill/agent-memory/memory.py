@@ -30,8 +30,34 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = os.getenv("AGENT_MEMORY_URL", "http://127.0.0.1:8787").rstrip("/")
 KEY = os.getenv("AGENT_MEMORY_SHARED_KEY", "")
+
+
+def _pick_base() -> str:
+    """First healthy hub in AGENT_MEMORY_URL (comma separated), else the first.
+
+    The hub host dual-boots, so devices list both OSes' tailnet names and
+    follow whichever one is up. Mirrors agent_memory_hubs.pick_hub; this file
+    is served standalone, so it cannot import it.
+    """
+    urls = [u.strip().rstrip("/") for u in re.split(r"[,\s]+", os.getenv("AGENT_MEMORY_URL", "")) if u.strip()]
+    urls = urls or ["http://127.0.0.1:8787"]
+    if len(urls) == 1:
+        return urls[0]
+    for url in urls:
+        req = urllib.request.Request(url + "/health")
+        if KEY:
+            req.add_header("X-Shared-Key", KEY)
+        try:
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if json.loads(resp.read().decode()).get("status") == "ok":
+                    return url
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    return urls[0]
+
+
+BASE = _pick_base()
 
 _URL = re.compile(r"^[a-zA-Z][\w+.-]*://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+?)(?:\.git)?/?$")
 _SSH = re.compile(r"^(?:ssh://)?(?:[^@/]+@)?([^:/]+)[:/](.+?)(?:\.git)?/?$")
@@ -73,7 +99,7 @@ def request(method: str, path: str, payload: dict | None = None) -> dict:
     except urllib.error.HTTPError as exc:
         sys.exit(f"hub error HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:200]}")
     except (urllib.error.URLError, OSError) as exc:
-        sys.exit(f"cannot reach hub at {BASE} ({exc}). Set AGENT_MEMORY_URL.")
+        sys.exit(f"cannot reach hub at {BASE} ({exc}). Set AGENT_MEMORY_URL (comma-separate several hubs).")
 
 
 def _q(pk: str) -> str:

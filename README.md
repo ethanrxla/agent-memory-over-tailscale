@@ -61,7 +61,7 @@ Install the watcher on each device:
 
 ```bash
 ./scripts/install_watcher.sh \
-  --backend-url http://memory-host.tailnet.ts.net:8787 \
+  --backend-url http://memory-host.tailnet.ts.net:8787,http://backup-host.tailnet.ts.net:8787 \
   --shared-key your-shared-key \
   --backfill        # ingest transcripts already on disk, then run as a service
 ```
@@ -74,6 +74,60 @@ Generate MCP client configs:
   --shared-key your-shared-key \
   --device laptop --device desktop
 ```
+
+## Keeping a hub up
+
+pop-os is the always-on hub, but the machine dual-boots: while it is in
+Windows, no hub is on the tailnet and every device's agents lose memory. Two
+pieces fix that.
+
+**Already running the hub in Docker on Windows?** If `docker compose up -d`
+is running the `agent-memory` container on the PC, you do *not* need a second
+hub -- it is just bound to `127.0.0.1` so the tailnet cannot see it. Expose
+that existing container instead (one time; it persists across reboots):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\serve_docker_hub.ps1
+```
+
+It runs `tailscale set --unattended` and `tailscale serve`, then prints the
+`AGENT_MEMORY_URL` list to set on your other devices. The native hub below is
+only for a PC without Docker.
+
+**1. Run a hub on the Windows side too.** From an elevated PowerShell in a
+clone of this repo on the PC (needs python.org Python 3.10+ and Tailscale):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\install_hub.ps1 -SharedKey your-shared-key -DisableSleep
+```
+
+This installs the deps into `.venv`, registers the `AgentMemoryHub` scheduled
+task (runs as SYSTEM at boot, before anyone logs in, and restarts the hub if it
+exits), sets Tailscale to run unattended, and serves the hub to the tailnet at
+`http://<pc-name>.<tailnet>.ts.net:8787` with Tailscale Serve, the same layout
+as pop-os. Settings are in `%ProgramData%\agent-memory\hub.env`, the log in
+`hub.log` next to it. Check it with `Get-ScheduledTask AgentMemoryHub`.
+
+**2. List every hub on every device.** `AGENT_MEMORY_URL` takes a
+comma-separated list in preference order. The CLI, MCP server, skill and
+watcher use the first hub that answers `/health`, and the long-lived MCP
+server and watcher switch over when their hub disappears:
+
+```bash
+export AGENT_MEMORY_URL=http://pop-os.tailf11891.ts.net:8787,http://<pc-name>.tailf11891.ts.net:8787
+```
+
+The two hubs keep separate databases: what is captured while the PC is in
+Windows lives in the Windows hub's database, and vice versa.
+
+### Watchers start at login
+
+`scripts/install_watcher.sh` installs a systemd user unit on Linux and a
+launchd agent on macOS (`~/Library/LaunchAgents/com.agent-memory.watcher.plist`,
+log in `~/Library/Logs/agent-memory-watcher.log`). On Windows, use
+`scripts\windows\install_watcher.ps1 -BackendUrl <hub list> -SharedKey <key>`.
+Every watcher spools locally while no hub is reachable and delivers when one
+returns, so nothing captured during an outage is lost.
 
 ## Using it from an agent
 

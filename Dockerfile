@@ -8,6 +8,7 @@ COPY main.py .
 COPY agent_memory ./agent_memory
 COPY agent_memory_cli.py .
 COPY agent_memory_mcp.py .
+COPY agent_memory_hubs.py .
 COPY skill ./skill
 
 ENV AGENT_MEMORY_DB_PATH=/data/agent_memory.db

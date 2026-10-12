@@ -7,6 +7,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from agent_memory_hubs import candidate_urls, pick_hub
+
 try:
     # Available when the wrapper sits alongside the package (the common case).
     from agent_memory.projects import derive_project
@@ -29,10 +31,29 @@ def _read_text(path: Path) -> str:
 
 class AgentMemoryHttpClient:
     def __init__(self, base_url: str | None = None, shared_key: str | None = None) -> None:
-        self.base_url = (base_url or os.getenv("AGENT_MEMORY_URL") or "http://127.0.0.1:8787").rstrip("/")
         self.shared_key = shared_key if shared_key is not None else os.getenv("AGENT_MEMORY_SHARED_KEY", "")
+        # AGENT_MEMORY_URL may list several hubs. The server is long-lived and
+        # the hub can move (pop-os dual-boots), so re-pick on connection loss.
+        self.candidates = candidate_urls(base_url or os.getenv("AGENT_MEMORY_URL"))
+        self._base_url: str | None = None if len(self.candidates) > 1 else self.candidates[0]
+
+    @property
+    def base_url(self) -> str:
+        if self._base_url is None:
+            self._base_url = pick_hub(",".join(self.candidates), self.shared_key)
+        return self._base_url
 
     def request_json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            return self._request_once(method, path, payload)
+        except RuntimeError:
+            if len(self.candidates) < 2 or not self._connection_lost:
+                raise
+            self._base_url = None
+            return self._request_once(method, path, payload)
+
+    def _request_once(self, method: str, path: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+        self._connection_lost = False
         url = self.base_url + path
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, method=method)
@@ -49,6 +70,7 @@ class AgentMemoryHttpClient:
             body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
         except urllib.error.URLError as exc:
+            self._connection_lost = True
             raise RuntimeError(f"Request failed: {exc}") from exc
 
 
