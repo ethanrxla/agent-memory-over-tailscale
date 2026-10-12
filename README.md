@@ -81,6 +81,19 @@ pop-os is the always-on hub, but the machine dual-boots: while it is in
 Windows, no hub is on the tailnet and every device's agents lose memory. Two
 pieces fix that.
 
+**Already running the hub in Docker on Windows?** If `docker compose up -d`
+is running the `agent-memory` container on the PC, you do *not* need a second
+hub -- it is just bound to `127.0.0.1` so the tailnet cannot see it. Expose
+that existing container instead (one time; it persists across reboots):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\serve_docker_hub.ps1
+```
+
+It runs `tailscale set --unattended` and `tailscale serve`, then prints the
+`AGENT_MEMORY_URL` list to set on your other devices. The native hub below is
+only for a PC without Docker.
+
 **1. Run a hub on the Windows side too.** From an elevated PowerShell in a
 clone of this repo on the PC (needs python.org Python 3.10+ and Tailscale):
 
