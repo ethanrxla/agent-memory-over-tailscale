@@ -27,8 +27,9 @@ echo "  installed -> $HOME/.claude/commands/memory.md  (use: /memory)"
 cat <<TXT
 
 Done. The skill calls the hub at \$AGENT_MEMORY_URL (default http://127.0.0.1:8787).
-On devices other than the hub, export it, e.g.:
-  export AGENT_MEMORY_URL=http://pop-os.tailf11891.ts.net:8787
+On devices other than the hub, export it. List every hub, comma separated, so
+agents follow the PC whether it booted pop-os or Windows, e.g.:
+  export AGENT_MEMORY_URL=http://pop-os.tailf11891.ts.net:8787,http://<windows-host>.tailf11891.ts.net:8787
 
 Restart your agent client (or reload skills) to pick it up, then invoke the
 "agent-memory" skill or run:  python3 ~/.claude/skills/agent-memory/memory.py brief

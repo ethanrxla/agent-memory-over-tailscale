@@ -25,19 +25,27 @@ SKILL_FILES = {
 INSTALL_SH = """#!/usr/bin/env bash
 # Install/update the agent-memory skill from the hub. Safe to re-run.
 set -euo pipefail
-HUB="${AGENT_MEMORY_URL:-%(hub)s}"
+HUBS="${AGENT_MEMORY_URL:-%(hub)s}"
+KEY_HDR=(${AGENT_MEMORY_SHARED_KEY:+-H "X-Shared-Key: $AGENT_MEMORY_SHARED_KEY"})
+# HUBS may list several hubs (comma separated); pull from the first one up.
+HUB=""
+for candidate in ${HUBS//,/ }; do
+  if curl -fsS -m 3 ${KEY_HDR[@]+"${KEY_HDR[@]}"} "${candidate%%/}/health" >/dev/null 2>&1; then
+    HUB="${candidate%%/}"; break
+  fi
+done
+[ -n "$HUB" ] || { echo "No hub reachable in: $HUBS" >&2; exit 1; }
 for dest in "$HOME/.claude/skills/agent-memory" "$HOME/.codex/skills/agent-memory"; do
   parent="$(dirname "$dest")"
   [ -d "$parent" ] || continue
   mkdir -p "$dest"
   for f in SKILL.md memory.py; do
-    curl -fsSL ${AGENT_MEMORY_SHARED_KEY:+-H "X-Shared-Key: $AGENT_MEMORY_SHARED_KEY"} \\
-      "$HUB/skill/agent-memory/$f" -o "$dest/$f"
+    curl -fsSL ${KEY_HDR[@]+"${KEY_HDR[@]}"} "$HUB/skill/agent-memory/$f" -o "$dest/$f"
   done
   chmod +x "$dest/memory.py"
   echo "  updated -> $dest"
 done
-echo "Set AGENT_MEMORY_URL=$HUB in your shell profile if it is not already set."
+echo "Set AGENT_MEMORY_URL=$HUBS in your shell profile if it is not already set."
 """
 
 

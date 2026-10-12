@@ -6,13 +6,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from agent_memory_hubs import pick_hub
 
-DEFAULT_URL = os.getenv("AGENT_MEMORY_URL", "http://127.0.0.1:8787")
 DEFAULT_KEY = os.getenv("AGENT_MEMORY_SHARED_KEY", "")
+_HUB: str | None = None
+
+
+def hub_url() -> str:
+    # AGENT_MEMORY_URL may list several hubs; probe once per invocation.
+    global _HUB
+    if _HUB is None:
+        _HUB = pick_hub(shared_key=DEFAULT_KEY)
+    return _HUB
 
 
 def request_json(method: str, path: str, payload: dict | None = None) -> dict:
-    url = DEFAULT_URL.rstrip("/") + path
+    url = hub_url() + path
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, method=method)
     req.add_header("Content-Type", "application/json")

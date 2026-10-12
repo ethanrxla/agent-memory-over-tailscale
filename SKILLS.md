@@ -62,5 +62,7 @@ Resources: `memory://skills`, `memory://service-info`.
 ## Tailscale
 
 Run the hub on one node reachable over Tailscale; point `AGENT_MEMORY_URL` at
-its Tailscale DNS name. Keep it off public interfaces and set
+its Tailscale DNS name. If that node is not always up (pop-os dual-boots
+Windows), run a hub on each side and list both, comma separated; clients use
+the first that answers. See "Keeping a hub up" in the README. Keep it off public interfaces and set
 `AGENT_MEMORY_SHARED_KEY` for an extra gate.

@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Skip recovering orphaned sessions from prompt history during backfill")
     args = parser.parse_args(argv)
 
-    deny = list(args.deny) + [p for p in os.getenv("AGENT_MEMORY_DENY", "").split(":") if p.strip()]
+    deny = list(args.deny) + [p for p in os.getenv("AGENT_MEMORY_DENY", "").split(os.pathsep) if p.strip()]
     spool = Spool(args.spool)
     client = HubClient(args.backend_url, args.shared_key)
 

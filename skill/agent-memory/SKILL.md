@@ -19,7 +19,8 @@ independent agents on different devices see each other's progress.
 All commands go through the bundled `memory.py` (stdlib only — no dependencies).
 Run it from this skill's directory. It reads the hub URL from `AGENT_MEMORY_URL`
 (default `http://127.0.0.1:8787`; on other devices set it to the hub, e.g.
-`http://pop-os.tailf11891.ts.net:8787`).
+`http://pop-os.tailf11891.ts.net:8787`). It may list several hubs, comma
+separated; the first one that answers is used.
 
 ## At the start of a coding session — do this first
 
