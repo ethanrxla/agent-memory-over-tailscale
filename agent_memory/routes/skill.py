@@ -37,7 +37,7 @@ for dest in "$HOME/.claude/skills/agent-memory" "$HOME/.codex/skills/agent-memor
   chmod +x "$dest/memory.py"
   echo "  updated -> $dest"
 done
-echo "Set AGENT_MEMORY_URL=$HUB in your shell profile if it is not already set."
+echo "Run: python3 ~/.claude/skills/agent-memory/memory.py status   (shows which hub is selected)"
 """
 
 

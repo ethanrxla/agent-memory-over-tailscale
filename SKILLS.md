@@ -61,6 +61,7 @@ Resources: `memory://skills`, `memory://service-info`.
 
 ## Tailscale
 
-Run the hub on one node reachable over Tailscale; point `AGENT_MEMORY_URL` at
-its Tailscale DNS name. Keep it off public interfaces and set
+Run the hub on a node reachable over Tailscale. Clients probe `AGENT_MEMORY_URL`,
+then `hubs` in `~/.agent-memory/config.json`, then the built-in defaults, and
+use the first healthy one; `memory.py status` shows the result. Keep it off public interfaces and set
 `AGENT_MEMORY_SHARED_KEY` for an extra gate.

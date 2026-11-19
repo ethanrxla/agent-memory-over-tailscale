@@ -18,7 +18,7 @@ It solves three problems at once:
 ## How it works
 
 ```
-pop-os (hub, always on)          per-device watcher            per-agent
+hub (pop-os, or rxla-pc-1)       per-device watcher            per-agent
 ┌────────────────────────┐       ┌──────────────────┐     ┌──────────────────┐
 │ FastAPI  :8787         │◄──────│ tail *.jsonl     │     │ agent-memory     │
 │ SQLite + FTS5 + vec0   │ over  │ filter → redact  │     │   skill          │
@@ -41,9 +41,52 @@ pop-os (hub, always on)          per-device watcher            per-agent
 - **Skill + MCP** (`skill/agent-memory/`, `agent_memory_mcp.py`): the tools an
   agent calls — `get_project_brief`, `search_memory`, `record_decision`, etc.
 
+## Hubs and failover
+
+No client hard-codes a hub. `memory.py`, the watcher and the MCP server share
+one resolver (`skill/agent-memory/memory.py`, loaded by path elsewhere via
+`agent_memory/hubs.py`) that probes candidates in order and uses the first
+whose `GET /health` answers within a couple of seconds (cached ~2 min):
+
+1. `AGENT_MEMORY_URL` (user env var; comma-separated list allowed),
+2. `hubs` in `~/.agent-memory/config.json`,
+3. built-in defaults: `pop-os.tailf11891.ts.net:8787`, then
+   `rxla-pc-1.tailf11891.ts.net:8787` (the same dual-boot PC under each OS).
+
+```json
+{"hubs": ["http://pop-os.tailf11891.ts.net:8787"],
+ "local_hub": {"repo": "C:/Users/ethan/Projects/agent-memory-over-tailscale", "port": 8787}}
+```
+
+`python3 memory.py status` shows every hub tried (with its error), the
+selected one, the watcher's last cycle and the spool backlog — never the key.
+The shared key is read only from the `AGENT_MEMORY_SHARED_KEY` env var.
+
+If nothing answers, commands exit with code 3 and the list of hubs tried, and
+agents are told to ask the user. On a machine with the hub code,
+`memory.py --start-local ...` (or `python scripts/start_local_hub.py`) starts a
+hub bound to this device's Tailscale address. The watcher never gives up: it
+spools until any configured hub answers, delivers there, and moves back to the
+preferred hub as soon as it returns (`--no-fallback` pins one hub).
+
+Two hubs means two databases. Push what landed on the fallback hub to the
+preferred one when both are up:
+
+```bash
+python3 skill/agent-memory/memory.py sync --from http://rxla-pc-1.tailf11891.ts.net:8787 \
+                                         --to   http://pop-os.tailf11891.ts.net:8787 [--since 2026-11-01] [--dry-run]
+```
+
+`sync` reads `/v1/export/...` from the source and re-posts through the normal
+ingest routes, which are idempotent (events on `(session_id, seq)`, entries on
+`(agent_id, namespace, source_id)`), so it is safe to repeat. To replay a
+device's transcripts instead, run the watcher with a fresh spool:
+`python -m watcher.daemon --backfill --backend-url <hub> --no-fallback --spool /tmp/replay.db`.
+
 ## Quick start
 
-Run the hub on the always-on node (e.g. `pop-os`):
+Run the hub on the usual always-on node (e.g. `pop-os`; clients fall back to
+other configured hubs when it is down):
 
 ```bash
 docker compose up -d --build
@@ -127,6 +170,20 @@ project isolation is enforced by the index itself). No external database. If
 ```bash
 PYTHONPATH=. python -m pytest -q
 ```
+
+The dashboard's mute/solo state helpers (`agent_memory/static/project_filter.js`)
+are unit-tested under `node` when it is installed (`tests/js/`); those tests
+skip otherwise.
+
+## Dashboard
+
+`/` and `/graph` refresh themselves (every 20–30 s, plus a Refresh button) and
+are served `Cache-Control: no-store`. Projects are listed by last activity, and
+a session's activity time is its newest transcript event, not upload time, so
+backfills don't bury current work. In the graph sidebar (which scrolls on its
+own), click a project to mute it, or right-click / Shift+F10 / the context-menu
+key for **Solo** and **Mute**; the state persists in `localStorage` and is
+shared with the dashboard's project list.
 
 ## Security
 
