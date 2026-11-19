@@ -214,6 +214,7 @@ def build_graph(
         by_project.setdefault(row["project_key"], []).append(row)
 
     project_palette = sorted(by_project.keys())
+    project_meta: dict[str, dict[str, Any]] = {}
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
 
@@ -226,6 +227,13 @@ def build_graph(
             "SELECT display_name FROM projects WHERE project_key = ?", (pkey,)
         ).fetchone()
         pid = f"project:{pkey}"
+        # The sidebar sorts by this, so a project with fresh activity rises to
+        # the top instead of sitting wherever its name falls alphabetically.
+        project_meta[pkey] = {
+            "display_name": display["display_name"] if display else pkey.rsplit("/", 1)[-1],
+            "last_active": max((r["last_event_at"] or "") for r in rows) or None,
+            "sessions": len(rows),
+        }
         # A one-session project has the same centroid as its only session. Move
         # every project root toward the origin so roots and leaves remain
         # visibly separate and independently clickable.
@@ -275,6 +283,7 @@ def build_graph(
         "nodes": nodes,
         "edges": edges,
         "projects": project_palette,
+        "project_meta": project_meta,
         "layout": "semantic" if used_embeddings else "structural",
         "embedded_sessions": len(embedded_ids),
         "total_sessions": len(session_ids),
