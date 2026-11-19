@@ -7,7 +7,9 @@
 <style>
   :root { --bg:#0a0b14; --panel:rgba(20,22,34,0.92); --ink:#e8e9f2; --muted:#9aa0b8;
           --border:rgba(255,255,255,0.12); --accent:#2dd4bf; }
+  :root { color-scheme:dark; }
   * { box-sizing:border-box; }
+  #legend-rows { scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.25) transparent; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
     font-family:"IBM Plex Sans","Segoe UI",sans-serif; overflow:hidden; }
   /* Canvas is a replaced element: inset:0 positions it but does not replace its
@@ -22,13 +24,34 @@
   #top .sub { color:var(--muted); font-size:13px; }
   #top .badge { color:var(--accent); font-size:12px; border:1px solid var(--border);
     padding:2px 9px; border-radius:999px; }
-  #legend { top:58px; left:18px; max-width:280px; background:var(--panel); border:1px solid var(--border);
-    border-radius:12px; padding:10px 12px; backdrop-filter:blur(8px); }
-  #legend h2 { margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
-  .leg-row { display:flex; align-items:center; gap:8px; padding:3px 0; font-size:12.5px; cursor:pointer; }
+  /* The sidebar is a flex column capped to the viewport; only the row list
+     scrolls (min-height:0 lets a flex child shrink below its content). */
+  #legend { top:58px; left:18px; width:min(290px,72vw); max-height:calc(100vh - 104px);
+    display:flex; flex-direction:column; min-height:0; background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; padding:10px 6px 8px 12px; backdrop-filter:blur(8px); }
+  #legend-head { display:flex; align-items:center; gap:8px; flex:0 0 auto; margin:0 6px 8px 0; }
+  #legend h2 { margin:0; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
+  #legend-head button { margin-left:auto; background:none; border:1px solid var(--border); color:var(--accent);
+    border-radius:7px; font:inherit; font-size:11px; padding:2px 7px; cursor:pointer; }
+  #legend-head button[hidden] { display:none; }
+  #legend-rows { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-right:6px; }
+  #legend-foot { flex:0 0 auto; color:var(--muted); font-size:11px; margin:8px 6px 0 0; }
+  .leg-row { display:flex; align-items:center; gap:8px; padding:3px 4px; font-size:12.5px; cursor:pointer;
+    border-radius:6px; outline:none; }
+  .leg-row:focus-visible { box-shadow:0 0 0 2px var(--accent); }
+  .leg-row:hover { background:rgba(255,255,255,0.05); }
   .leg-row .dot { width:11px; height:11px; border-radius:50%; flex:0 0 auto; box-shadow:0 0 8px currentColor; }
+  .leg-row .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   .leg-row.off { opacity:0.35; }
+  .leg-row.muted .name { text-decoration:line-through; }
+  .leg-row.solo { background:rgba(45,212,191,0.14); }
+  .leg-row .tag { font-size:10px; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
   .leg-row .cnt { margin-left:auto; color:var(--muted); font-size:11px; }
+  .ctx-menu { position:fixed; z-index:20; min-width:150px; background:#141624; border:1px solid var(--border);
+    border-radius:9px; padding:4px; box-shadow:0 12px 30px rgba(0,0,0,0.5); display:flex; flex-direction:column; }
+  .ctx-menu button { background:none; border:none; color:var(--ink); text-align:left; font:inherit; font-size:12.5px;
+    padding:6px 10px; border-radius:6px; cursor:pointer; }
+  .ctx-menu button:hover, .ctx-menu button:focus { background:rgba(45,212,191,0.16); outline:none; }
   #detail { top:58px; right:0; bottom:0; width:min(400px,86vw); background:var(--panel);
     border-left:1px solid var(--border); backdrop-filter:blur(10px); padding:18px 18px 28px;
     overflow-y:auto; transform:translateX(100%); transition:transform .22s ease; }
@@ -69,15 +92,28 @@
   <span class="badge" id="layout-badge"></span>
   <a href="/" style="pointer-events:auto;color:var(--muted);font-size:12px;text-decoration:none">dashboard →</a>
 </div>
-<div class="hud" id="legend"><h2>Projects</h2><div id="legend-rows"></div></div>
+<div class="hud" id="legend" role="region" aria-label="Projects">
+  <div id="legend-head"><h2>Projects</h2><button type="button" id="clear-filters" hidden onclick="setFilter(ProjectFilter.reset())">show all</button></div>
+  <div id="legend-rows" role="list"></div>
+  <div id="legend-foot">click: mute · right-click / Shift+F10: solo, mute</div>
+</div>
 <div class="hud" id="detail"><button class="close" onclick="closeDetail()">×</button><div id="detail-body"></div></div>
 <div class="hud" id="hint">drag to rotate · scroll to zoom · click a node</div>
 <div class="hud" id="controls">
+  <span id="updated" style="color:var(--muted);font-size:12px;align-self:center"></span>
+  <button onclick="refresh(true)" id="refresh-btn" title="Reload graph data now">refresh</button>
+  <button onclick="toggleAuto()" id="auto-btn" title="Reload graph data every 30 s">auto-refresh: on</button>
   <button onclick="resetView()">reset</button>
   <button onclick="toggleSpin()" id="spin-btn">pause spin</button>
 </div>
 <div id="tooltip"></div>
 <div id="empty-state"></div>
+<script>
+__PROJECT_FILTER_JS__
+</script>
+<script>
+__CONTEXT_MENU_JS__
+</script>
 <script>
 // Palette for project clusters (distinct, glowing on dark).
 const PALETTE = ["#2dd4bf","#f472b6","#facc15","#60a5fa","#a78bfa","#fb923c",
@@ -94,7 +130,13 @@ window.addEventListener("resize",resize);
 
 let graph={nodes:[],edges:[]};
 let rotX=-0.35, rotY=0.6, zoom=1, spin=true;
-let hidden=new Set(); let selectedId=null; let hoverNode=null;
+let filterState=ProjectFilter.load(window.localStorage); let selectedId=null; let hoverNode=null;
+function visible(pk){ return ProjectFilter.isVisible(filterState,pk); }
+function setFilter(state){ filterState=ProjectFilter.normalize(state); ProjectFilter.save(window.localStorage,filterState);
+  if(selectedId){ const n=byId.get(selectedId); if(n && !visible(n.project_key)) closeDetail(); }
+  paintLegend(); updateSubtitle(); }
+// Another tab (e.g. the dashboard) changed the filter.
+window.addEventListener("storage",e=>{ if(e.key===ProjectFilter.STORAGE_KEY){ filterState=ProjectFilter.load(window.localStorage); paintLegend(); updateSubtitle(); } });
 let drag=null;
 
 function project(n){
@@ -117,8 +159,8 @@ function draw(){
   g.addColorStop(0,"rgba(45,212,191,0.05)"); g.addColorStop(1,"rgba(10,11,20,0)");
   ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
 
-  const visible = graph.nodes.filter(n=>!hidden.has(n.project_key));
-  const P=new Map(); visible.forEach(n=>P.set(n.id,project(n)));
+  const shown = graph.nodes.filter(n=>visible(n.project_key));
+  const P=new Map(); shown.forEach(n=>P.set(n.id,project(n)));
 
   // edges first (behind nodes)
   ctx.lineWidth=1;
@@ -132,7 +174,7 @@ function draw(){
   });
 
   // nodes back-to-front
-  const order=visible.slice().sort((n1,n2)=>P.get(n1.id).depth-P.get(n2.id).depth);
+  const order=shown.slice().sort((n1,n2)=>P.get(n1.id).depth-P.get(n2.id).depth);
   hoverNode=null;
   order.forEach(n=>{
     const p=P.get(n.id); const col=PALETTE[n.color_index%PALETTE.length];
@@ -165,7 +207,7 @@ function hexA(hex,a){ const n=parseInt(hex.slice(1),16);
 let byId=new Map();
 function pickNode(mx,my){
   let best=null,bd=1e9;
-  for(const n of graph.nodes){ if(hidden.has(n.project_key)||n._sx==null) continue;
+  for(const n of graph.nodes){ if(!visible(n.project_key)||n._sx==null) continue;
     const d=Math.hypot(n._sx-mx,n._sy-my); if(d< (n._r+7) && d<bd){ bd=d; best=n; } }
   return best;
 }
@@ -234,33 +276,88 @@ function toggleSpin(){ spin=!spin; document.getElementById("spin-btn").textConte
 
 function buildLegend(){
   const counts={}; graph.nodes.forEach(n=>{ if(n.type==="session") counts[n.project_key]=(counts[n.project_key]||0)+1; });
-  const rows=document.getElementById("legend-rows"); rows.innerHTML="";
-  (graph.projects||[]).forEach((pk,i)=>{
-    const col=PALETTE[i%PALETTE.length];
-    const el=document.createElement("div"); el.className="leg-row";
+  const meta=graph.project_meta||{};
+  const rows=document.getElementById("legend-rows");
+  const focusedKey=document.activeElement&&document.activeElement.dataset?document.activeElement.dataset.project:null;
+  const scroll=rows.scrollTop; rows.innerHTML="";
+  // Most recently active first; colours stay keyed to the alphabetical palette index.
+  ProjectFilter.sortByActivity(graph.projects||[],meta).forEach(pk=>{
+    const col=PALETTE[(graph.projects.indexOf(pk))%PALETTE.length];
+    const m=meta[pk]||{};
+    const el=document.createElement("div"); el.className="leg-row"; el.tabIndex=0;
+    el.setAttribute("role","listitem"); el.dataset.project=pk;
+    el.title=pk+(m.last_active?"\nlast active "+fmtTs(m.last_active):"");
     el.innerHTML=`<span class="dot" style="background:${col};color:${col}"></span>`+
-      `<span>${esc(pk.split('/').pop())}</span><span class="cnt">${counts[pk]||0}</span>`;
-    el.onclick=()=>{ if(hidden.has(pk)) hidden.delete(pk); else hidden.add(pk); el.classList.toggle("off"); };
+      `<span class="name">${esc(m.display_name||pk.split('/').pop())}</span><span class="tag"></span>`+
+      `<span class="cnt">${counts[pk]||0}</span>`;
+    el.onclick=()=>setFilter(ProjectFilter.toggleMute(filterState,pk));
+    el.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); setFilter(ProjectFilter.toggleMute(filterState,pk)); }
+      else if(e.key==="ArrowDown"&&el.nextElementSibling){ e.preventDefault(); el.nextElementSibling.focus(); }
+      else if(e.key==="ArrowUp"&&el.previousElementSibling){ e.preventDefault(); el.previousElementSibling.focus(); } });
+    attachProjectMenu(el,pk,()=>filterState,setFilter);
     rows.appendChild(el);
+    if(pk===focusedKey) el.focus();
   });
+  rows.scrollTop=scroll;
+  paintLegend();
+}
+function paintLegend(){
+  document.querySelectorAll("#legend-rows .leg-row").forEach(el=>{
+    const pk=el.dataset.project, muted=ProjectFilter.isMuted(filterState,pk), solo=ProjectFilter.isSolo(filterState,pk);
+    el.classList.toggle("off",!visible(pk)); el.classList.toggle("muted",muted); el.classList.toggle("solo",solo);
+    el.querySelector(".tag").textContent=solo?"solo":(muted?"muted":"");
+    el.setAttribute("aria-label",`${el.querySelector(".name").textContent}${solo?", solo":""}${muted?", muted":""}`);
+  });
+  document.getElementById("clear-filters").hidden=!ProjectFilter.isFiltered(filterState);
+}
+function updateSubtitle(){
+  if(!graph||!graph.projects) return;
+  const shownProjects=graph.projects.filter(visible).length;
+  document.getElementById("subtitle").textContent=
+    `${graph.total_sessions} sessions · ${graph.projects.length} projects`+
+    (ProjectFilter.isFiltered(filterState)?` · showing ${shownProjects}`:"");
 }
 
 function loop(){ if(spin && !drag) rotY+=0.0016; draw(); requestAnimationFrame(loop); }
 
+let lastSig=null, auto=true;
+function signature(d){ let latest=""; (d.nodes||[]).forEach(n=>{ const t=n.meta&&n.meta.last_event_at; if(t&&t>latest) latest=t; });
+  return [d.total_sessions,(d.nodes||[]).length,d.embedded_sessions,latest].join("|"); }
 function ingest(d){
   graph=d; byId=new Map(); graph.nodes.forEach(n=>byId.set(n.id,n));
-  document.getElementById("subtitle").textContent=
-    `${d.total_sessions} sessions · ${d.projects.length} projects`;
+  lastSig=signature(d);
+  updateSubtitle();
   document.getElementById("layout-badge").textContent=
     d.layout==="semantic"?`semantic layout · ${d.embedded_sessions}/${d.total_sessions} embedded`:"structural layout (no embeddings yet)";
   buildLegend();
-  if(!graph.nodes.length){ document.getElementById("empty-state").style.display="flex";
-    document.getElementById("empty-state").textContent="No sessions yet. Run the watcher backfill, then reload."; }
+  // Keep the open detail panel in sync with the fresh data.
+  if(selectedId){ const n=byId.get(selectedId); if(n) openDetail(n); else closeDetail(); }
+  const empty=document.getElementById("empty-state");
+  if(!graph.nodes.length){ empty.style.display="flex";
+    empty.textContent="No sessions yet. Run the watcher backfill; this page refreshes itself."; }
+  else empty.style.display="none";
+  document.getElementById("updated").textContent="updated "+new Date().toLocaleTimeString();
 }
+// The hub page used to fetch once, so sessions ingested after it was opened
+// never appeared until a manual reload. Poll with no-store and only rebuild
+// when something actually changed.
+function refresh(manual){
+  if(GRAPH_DATA) return;
+  const btn=document.getElementById("refresh-btn"); if(manual) btn.textContent="refreshing…";
+  return fetch(DATA_URL,{cache:"no-store",credentials:"same-origin"}).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(d=>{ if(manual||signature(d)!==lastSig) ingest(d);
+      else document.getElementById("updated").textContent="updated "+new Date().toLocaleTimeString(); })
+    .catch(err=>{ document.getElementById("updated").textContent="refresh failed: "+err.message; })
+    .finally(()=>{ btn.textContent="refresh"; });
+}
+function toggleAuto(){ auto=!auto; document.getElementById("auto-btn").textContent="auto-refresh: "+(auto?"on":"off"); }
+setInterval(()=>{ if(auto && !document.hidden) refresh(false); },30000);
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden && auto) refresh(false); });
 
 resize();
-if(GRAPH_DATA){ ingest(GRAPH_DATA); loop(); }
-else { fetch(DATA_URL).then(r=>r.json()).then(d=>{ ingest(d); loop(); })
+if(GRAPH_DATA){ ingest(GRAPH_DATA); loop();
+  ["refresh-btn","auto-btn"].forEach(id=>document.getElementById(id).style.display="none"); }
+else { fetch(DATA_URL,{cache:"no-store",credentials:"same-origin"}).then(r=>r.json()).then(d=>{ ingest(d); loop(); })
   .catch(err=>{ document.getElementById("empty-state").style.display="flex";
     document.getElementById("empty-state").textContent="Could not load graph data: "+err; }); }
 </script>

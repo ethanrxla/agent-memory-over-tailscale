@@ -27,13 +27,83 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _load_resolver():
+    """The shared hub resolver (skill/agent-memory/memory.py), or None."""
+    try:
+        from agent_memory.hubs import load_resolver
+    except Exception:  # pragma: no cover - standalone wrapper without the package
+        import importlib.util
+
+        path = Path(__file__).resolve().parent / "skill" / "agent-memory" / "memory.py"
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location("agent_memory_skill_client", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            return None
+        return module
+    return load_resolver()
+
+
 class AgentMemoryHttpClient:
+    """HTTP client that talks to the first reachable configured hub.
+
+    An explicit ``base_url`` pins one hub. Otherwise the hub is resolved lazily
+    (AGENT_MEMORY_URL, then ~/.agent-memory/config.json ``hubs``, then the
+    defaults -- the same order as memory.py and the watcher) on the first
+    request, and re-resolved once if that hub stops answering.
+    """
+
     def __init__(self, base_url: str | None = None, shared_key: str | None = None) -> None:
-        self.base_url = (base_url or os.getenv("AGENT_MEMORY_URL") or "http://127.0.0.1:8787").rstrip("/")
-        self.shared_key = shared_key if shared_key is not None else os.getenv("AGENT_MEMORY_SHARED_KEY", "")
+        self._pinned = base_url.rstrip("/") if base_url else None
+        self._resolved: str | None = None
+        self._resolver = None if self._pinned else _load_resolver()
+        if shared_key is not None:
+            self.shared_key = shared_key
+        elif self._resolver is not None:
+            self.shared_key = self._resolver.shared_key(self._resolver.load_config())
+        else:
+            self.shared_key = os.getenv("AGENT_MEMORY_SHARED_KEY", "")
+
+    @property
+    def base_url(self) -> str:
+        if self._pinned:
+            return self._pinned
+        if self._resolved:
+            return self._resolved
+        if self._resolver is None:
+            return (os.getenv("AGENT_MEMORY_URL") or "http://127.0.0.1:8787").split(",")[0].strip().rstrip("/")
+        return self._resolve()
+
+    def _resolve(self, refresh: bool = False) -> str:
+        r = self._resolver
+        result = r.resolve_hub(key=self.shared_key, use_cache=not refresh)
+        if not result["selected"]:
+            raise RuntimeError(r.no_hub_message(result["tried"], r.find_local_hub_code()))
+        self._resolved = result["selected"].rstrip("/")
+        return self._resolved
 
     def request_json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        url = self.base_url + path
+        try:
+            return self._request_once(self.base_url, method, path, payload)
+        except urllib.error.URLError as exc:
+            if self._pinned or self._resolver is None:
+                raise RuntimeError(f"Request failed: {exc}") from exc
+            # The hub we were using went away (dual-boot, reboot): re-resolve once.
+            self._resolver.clear_cache()
+            self._resolved = None
+            base = self._resolve(refresh=True)
+            try:
+                return self._request_once(base, method, path, payload)
+            except urllib.error.URLError as exc2:
+                raise RuntimeError(f"Request failed: {exc2}") from exc2
+
+    def _request_once(self, base: str, method: str, path: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+        url = base + path
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, method=method)
         req.add_header("Content-Type", "application/json")
@@ -43,13 +113,11 @@ class AgentMemoryHttpClient:
             req.data = data
 
         try:
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=60) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Request failed: {exc}") from exc
 
 
 class AgentMemoryMcpServer:

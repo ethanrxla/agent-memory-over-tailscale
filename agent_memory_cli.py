@@ -7,28 +7,24 @@ import urllib.parse
 import urllib.request
 
 
-DEFAULT_URL = os.getenv("AGENT_MEMORY_URL", "http://127.0.0.1:8787")
-DEFAULT_KEY = os.getenv("AGENT_MEMORY_SHARED_KEY", "")
+_CLIENT = None
+
+
+def _client():
+    """Same hub resolution as memory.py, the watcher and the MCP server."""
+    global _CLIENT
+    if _CLIENT is None:
+        from agent_memory_mcp import AgentMemoryHttpClient
+
+        _CLIENT = AgentMemoryHttpClient()
+    return _CLIENT
 
 
 def request_json(method: str, path: str, payload: dict | None = None) -> dict:
-    url = DEFAULT_URL.rstrip("/") + path
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, method=method)
-    req.add_header("Content-Type", "application/json")
-    if DEFAULT_KEY:
-        req.add_header("X-Shared-Key", DEFAULT_KEY)
-    if data is not None:
-        req.data = data
-
     try:
-        with urllib.request.urlopen(req) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"HTTP {exc.code}: {body}") from exc
-    except urllib.error.URLError as exc:
-        raise SystemExit(f"Request failed: {exc}") from exc
+        return _client().request_json(method, path, payload)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def cmd_register(args: argparse.Namespace) -> None:

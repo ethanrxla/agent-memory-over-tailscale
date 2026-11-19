@@ -14,7 +14,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from ..context import AppContext
 from ..models import SearchRequest
 from ..retrieval import search as run_search
-from ..store import format_ts
+from ..store import format_ts, utc_now
+from .graph import NO_STORE, static_js
 
 COOKIE_NAME = "agent_memory_key"
 
@@ -39,9 +40,19 @@ def collect(ctx: AppContext, query: str | None, project_key: str | None) -> dict
             "chunks": count("SELECT COUNT(*) c FROM memory_chunks"),
             "embedded": count("SELECT COUNT(*) c FROM memory_chunks WHERE embedded_at IS NOT NULL"),
             "queued": count("SELECT COUNT(*) c FROM embedding_queue"),
-            "last_updated": conn.execute(
-                "SELECT MAX(ts) v FROM memory_chunks"
-            ).fetchone()["v"],
+            # Newest write of any kind. This used to be MAX(memory_chunks.ts),
+            # which only moves once the background worker indexes a summary --
+            # so freshly ingested sessions left the dashboard looking stale.
+            "last_updated": max(
+                (
+                    v for v in (
+                        conn.execute("SELECT MAX(last_event_at) v FROM sessions").fetchone()["v"],
+                        conn.execute("SELECT MAX(updated_at) v FROM entries").fetchone()["v"],
+                        conn.execute("SELECT MAX(ts) v FROM memory_chunks").fetchone()["v"],
+                    ) if v
+                ),
+                default=None,
+            ),
         }
 
         sessions = conn.execute(
@@ -51,7 +62,7 @@ def collect(ctx: AppContext, query: str | None, project_key: str | None) -> dict
                 ORDER BY CASE tier WHEN 'final' THEN 0 ELSE 1 END LIMIT 1
             ) AS summary
             FROM sessions s WHERE s.is_sidechain = 0
-            ORDER BY s.last_event_at DESC LIMIT 10
+            ORDER BY s.last_event_at DESC LIMIT 25
             """
         ).fetchall()
 
@@ -60,7 +71,7 @@ def collect(ctx: AppContext, query: str | None, project_key: str | None) -> dict
             SELECT p.project_key, p.display_name,
                    (SELECT COUNT(*) FROM sessions WHERE project_key = p.project_key) AS session_count,
                    (SELECT MAX(last_event_at) FROM sessions WHERE project_key = p.project_key) AS last_active
-            FROM projects p ORDER BY last_active DESC NULLS LAST LIMIT 10
+            FROM projects p ORDER BY last_active DESC NULLS LAST, p.project_key LIMIT 200
             """
         ).fetchall()
 
@@ -101,14 +112,19 @@ def collect(ctx: AppContext, query: str | None, project_key: str | None) -> dict
         "agents": [dict(row) for row in agents],
         "search": {"query": query or "", "project_key": project_key or "", "results": results, **search_meta},
         "service": ctx.status(),
+        "generated_at": utc_now(),
     }
+
+
+def _attr(value: object) -> str:
+    return escape(str(value), quote=True)
 
 
 def render(payload: dict[str, Any]) -> str:
     stats = payload["stats"]
 
     sessions_html = "".join(
-        "<tr>"
+        f"<tr data-project='{_attr(s['project_key'])}'>"
         f"<td><code>{escape(str(s['project_key']))}</code></td>"
         f"<td>{escape(s['ai_title'] or s['session_id'][:8])}"
         + (f"<div class='summary'>{escape((s['summary'] or '')[:180])}</div>" if s["summary"] else "")
@@ -122,7 +138,7 @@ def render(payload: dict[str, Any]) -> str:
     ) or "<tr><td colspan='6' class='empty'>No sessions ingested yet. Start the watcher to populate this.</td></tr>"
 
     entries_html = "".join(
-        "<tr>"
+        f"<tr data-project='{_attr(e['project_key'])}'>"
         f"<td><code>{escape(str(e['project_key']))}</code></td>"
         f"<td>{escape(str(e['kind']))}</td>"
         f"<td>{escape(str(e['title']))}</td>"
@@ -133,7 +149,8 @@ def render(payload: dict[str, Any]) -> str:
     ) or "<tr><td colspan='5' class='empty'>No entries stored yet.</td></tr>"
 
     projects_html = "".join(
-        "<tr>"
+        f"<tr class='project-row' tabindex='0' data-project='{_attr(p['project_key'])}' "
+        f"title='{_attr(p['project_key'])}'>"
         f"<td><code>{escape(str(p['project_key']))}</code></td>"
         f"<td>{p['session_count']}</td>"
         f"<td>{escape(format_ts(p['last_active']))}</td>"
@@ -182,7 +199,7 @@ def render(payload: dict[str, Any]) -> str:
     else:
         results_html = "<p class='empty'>Enter a query to search shared memory.</p>"
 
-    return _template().substitute(
+    html = _template().substitute(
         stat_projects=stats["projects"], stat_sessions=stats["sessions"], stat_events=stats["events"],
         stat_summaries=stats["summaries"], stat_entries=stats["entries"], stat_agents=stats["agents"],
         sessions_html=sessions_html, entries_html=entries_html,
@@ -191,6 +208,14 @@ def render(payload: dict[str, Any]) -> str:
         query_value=escape(payload["search"]["query"]),
         project_value=escape(payload["search"]["project_key"]),
         last_updated=escape(format_ts(stats["last_updated"])),
+        generated_at=escape(str(payload.get("generated_at") or "")),
+    )
+    # Scripts are inlined after substitution: string.Template would choke on
+    # any dollar sign in them.
+    return (
+        html.replace("/*PROJECT_FILTER_JS*/", static_js("project_filter.js"))
+        .replace("/*CONTEXT_MENU_JS*/", static_js("context_menu.js"))
+        .replace("/*DASHBOARD_LIVE_JS*/", static_js("dashboard_live.js"))
     )
 
 
@@ -219,12 +244,14 @@ def register(app: FastAPI, ctx: AppContext) -> None:
         project_key: str | None = Query(default=None),
         _: None = Depends(browser_auth),
     ) -> HTMLResponse:
-        return HTMLResponse(render(collect(ctx, q, project_key)))
+        return HTMLResponse(render(collect(ctx, q, project_key)), headers=NO_STORE)
 
     @app.get("/dashboard/data")
     def dashboard_json(
+        response: Response,
         q: str | None = Query(default=None),
         project_key: str | None = Query(default=None),
         _: None = Depends(browser_auth),
     ) -> dict[str, Any]:
+        response.headers.update(NO_STORE)
         return collect(ctx, q, project_key)

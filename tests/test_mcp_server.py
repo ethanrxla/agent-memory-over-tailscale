@@ -1,3 +1,5 @@
+import os
+
 from agent_memory_mcp import AgentMemoryMcpServer
 
 
@@ -157,7 +159,8 @@ def test_search_derives_project_scope_from_cwd() -> None:
     method, path, payload = server.http.calls[-1]
     assert path == "/v1/search"
     # cwd with no git repo derives a path: project key and scopes to it.
-    assert payload["project_key"] == "path:/tmp/some/dir"
+    # (realpath: on Windows /tmp/some/dir is C:\\tmp\\some\\dir.)
+    assert payload["project_key"] == "path:" + os.path.realpath("/tmp/some/dir")
     assert payload["scope"] == "project"
 
 
