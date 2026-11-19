@@ -213,8 +213,9 @@ def upsert_session(conn: sqlite3.Connection, payload: Any) -> str:
         INSERT INTO sessions (
             session_id, project_key, agent_id, device_name, tool, cwd, git_branch,
             ai_title, last_prompt, status, is_sidechain, started_at, last_event_at,
-            event_count, token_estimate, summary_dirty, summarized_event_count, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, 0, ?)
+            event_count, token_estimate, summary_dirty, summarized_event_count, metadata_json,
+            last_ingest_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, 0, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             project_key = excluded.project_key,
             agent_id = COALESCE(excluded.agent_id, sessions.agent_id),
@@ -225,7 +226,8 @@ def upsert_session(conn: sqlite3.Connection, payload: Any) -> str:
             ai_title = COALESCE(excluded.ai_title, sessions.ai_title),
             last_prompt = COALESCE(excluded.last_prompt, sessions.last_prompt),
             status = COALESCE(excluded.status, sessions.status),
-            metadata_json = excluded.metadata_json
+            metadata_json = excluded.metadata_json,
+            last_ingest_at = excluded.last_ingest_at
         """,
         (
             payload.session_id,
@@ -240,8 +242,11 @@ def upsert_session(conn: sqlite3.Connection, payload: Any) -> str:
             payload.status or "active",
             1 if payload.is_sidechain else 0,
             payload.started_at or now,
-            now,
+            # Placeholder until events arrive; insert_events replaces it with
+            # the newest event timestamp. Upload time lives in last_ingest_at.
+            payload.started_at or now,
             json.dumps(payload.metadata),
+            now,
         ),
     )
     return payload.session_id
@@ -295,12 +300,17 @@ def insert_events(conn: sqlite3.Connection, session_id: str, events: list[Any]) 
             UPDATE sessions
             SET event_count = (SELECT COUNT(*) FROM session_events WHERE session_id = ?),
                 token_estimate = token_estimate + ?,
-                last_event_at = MAX(last_event_at, ?),
+                -- When the work happened (newest transcript event), never
+                -- upload time: a backfill of old transcripts must not make
+                -- them look active today. Upload time is last_ingest_at.
+                last_event_at = COALESCE(
+                    (SELECT MAX(ts) FROM session_events WHERE session_id = ?), ?),
+                last_ingest_at = ?,
                 status = CASE WHEN status = 'closed' THEN 'active' ELSE status END,
                 summary_dirty = 1
             WHERE session_id = ?
             """,
-            (session_id, tokens, latest_ts or utc_now(), session_id),
+            (session_id, tokens, session_id, latest_ts or utc_now(), utc_now(), session_id),
         )
 
     return {"inserted": inserted, "skipped": skipped}
