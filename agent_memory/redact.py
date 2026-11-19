@@ -106,6 +106,9 @@ def path_is_denied(path: str, deny: list[str]) -> bool:
             root_resolved = os.path.realpath(os.path.expanduser(root))
         except OSError:
             root_resolved = root
-        if resolved == root_resolved or resolved.startswith(root_resolved.rstrip("/") + "/"):
+        # normcase + both separators so Windows paths (C:\x\y) match too.
+        a = os.path.normcase(resolved).replace("\\", "/")
+        b = os.path.normcase(root_resolved).replace("\\", "/").rstrip("/")
+        if a == b or a.startswith(b + "/"):
             return True
     return False
