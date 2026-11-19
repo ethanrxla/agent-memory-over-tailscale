@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 
 class HubClient:
@@ -36,3 +37,46 @@ class HubClient:
 
     def register_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/agents/register", payload)
+
+
+class ResolvingHubClient(HubClient):
+    """A HubClient that re-picks its hub from an ordered candidate list.
+
+    ``health()`` (which ``deliver`` calls before draining the spool) probes the
+    candidates in preference order every cycle and points ``base_url`` at the
+    first healthy one. So the watcher delivers to whichever configured hub is
+    up, moves back to the preferred hub as soon as it returns, and -- when none
+    answers -- reports unhealthy so the spool simply keeps growing.
+    """
+
+    def __init__(self, candidates: list[tuple[str, str]], shared_key: str = "",
+                 timeout: float = 30.0, resolve: Callable[..., dict[str, Any]] | None = None) -> None:
+        if not candidates:
+            raise ValueError("at least one hub candidate is required")
+        super().__init__(candidates[0][0], shared_key, timeout)
+        self.candidates = candidates
+        self._resolve = resolve
+        self.selected: str | None = None
+        self.last_tried: list[dict[str, Any]] = []
+
+    @property
+    def primary(self) -> str:
+        return self.candidates[0][0].rstrip("/")
+
+    def health(self) -> bool:
+        if self._resolve is None:
+            ok = super().health()
+            self.selected = self.base_url if ok else None
+            return ok
+        result = self._resolve(self.candidates, key=self.shared_key, use_cache=False)
+        self.last_tried = result.get("tried") or []
+        selected = result.get("selected")
+        selected = selected.rstrip("/") if selected else None
+        if selected and selected != self.selected:
+            note = "" if selected == self.primary else " (fallback; preferred hub is down)"
+            print(f"[watcher] delivering to {selected}{note}", file=sys.stderr, flush=True)
+        self.selected = selected
+        if selected:
+            self.base_url = selected
+            return True
+        return False
