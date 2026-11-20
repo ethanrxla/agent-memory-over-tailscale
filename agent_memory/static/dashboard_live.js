@@ -42,7 +42,6 @@
     note.textContent = state.solo ? "Solo: " + state.solo :
       (n ? n + " project" + (n === 1 ? "" : "s") + " muted" : "");
     if (hidden) { note.textContent += " (" + hidden + " rows hidden)"; }
-    document.getElementById("show-all").hidden = !PF.isFiltered(state);
   }
 
   function wireProjects() {
