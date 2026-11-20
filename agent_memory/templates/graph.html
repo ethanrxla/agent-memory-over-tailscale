@@ -287,7 +287,7 @@ function buildLegend(){
       `<span class="cnt">${counts[pk]||0}</span>`;
     el.addEventListener("keydown",e=>{ if(e.key==="ArrowDown"&&el.nextElementSibling){ e.preventDefault(); el.nextElementSibling.focus(); }
       else if(e.key==="ArrowUp"&&el.previousElementSibling){ e.preventDefault(); el.previousElementSibling.focus(); } });
-    attachProjectControls(el,pk,()=>filterState,setFilter);
+    attachProjectControls(el,pk,()=>filterState,setFilter,graph.projects);
     rows.appendChild(el);
     if(pk===focusedKey) el.focus();
   });

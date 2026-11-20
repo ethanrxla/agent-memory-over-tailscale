@@ -41,6 +41,12 @@ s = PF.toggleMute(PF.toggleSolo(PF.empty(), "a"), "a");
 assert.equal(s.solo, null);
 assert.ok(PF.isMuted(s, "a"));
 
+// Clicking a hidden project during solo reveals both and keeps the rest muted.
+s = PF.toggleSolo({ muted: ["a", "b", "archived"], solo: null }, "a");
+s = PF.toggleMute(s, "b", ["a", "b", "c"]);
+assert.deepEqual(s, { muted: ["archived", "c"], solo: null });
+assert.deepEqual(PF.toggleMute(s, "b").muted, ["archived", "c", "b"]);
+
 // functions never mutate their input
 const frozen = Object.freeze({ muted: Object.freeze(["x"]), solo: null });
 PF.toggleMute(frozen, "y"); PF.toggleSolo(frozen, "y"); PF.apply(frozen, "reset", "x");

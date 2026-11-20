@@ -51,8 +51,14 @@
     return Boolean(s.solo) || s.muted.length > 0;
   }
 
-  function toggleMute(state, key) {
+  function toggleMute(state, key, projects) {
     var s = normalize(state);
+    if (s.solo && s.solo !== key && projects) {
+      var muted = new Set(s.muted.concat(projects));
+      muted.delete(s.solo);
+      muted.delete(key);
+      return { muted: Array.from(muted), solo: null };
+    }
     if (s.muted.indexOf(key) !== -1) {
       return { muted: s.muted.filter(function (k) { return k !== key; }), solo: s.solo };
     }

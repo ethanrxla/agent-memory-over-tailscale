@@ -46,9 +46,10 @@
   }
 
   function wireProjects() {
+    var projects = Array.from(document.querySelectorAll("tr[data-project]"), function (tr) { return tr.dataset.project; });
     document.querySelectorAll("tr.project-row").forEach(function (tr) {
       var key = tr.getAttribute("data-project");
-      attachProjectControls(tr, key, function () { return state; }, setState);
+      attachProjectControls(tr, key, function () { return state; }, setState, projects);
       tr.addEventListener("keydown", function (e) {
         if (e.key === "ArrowDown" && tr.nextElementSibling) { e.preventDefault(); tr.nextElementSibling.focus(); }
         else if (e.key === "ArrowUp" && tr.previousElementSibling) { e.preventDefault(); tr.previousElementSibling.focus(); }

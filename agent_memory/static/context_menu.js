@@ -1,8 +1,8 @@
 /* Shared mouse and keyboard controls for project rows. */
 (function (root) {
   "use strict";
-  root.attachProjectControls = function (row, key, getState, setState) {
-    function mute() { setState(root.ProjectFilter.toggleMute(getState(), key)); }
+  root.attachProjectControls = function (row, key, getState, setState, projects) {
+    function mute() { setState(root.ProjectFilter.toggleMute(getState(), key, projects)); }
     function solo() { setState(root.ProjectFilter.toggleSolo(getState(), key)); }
 
     row.addEventListener("click", mute);
