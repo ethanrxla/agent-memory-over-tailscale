@@ -47,11 +47,6 @@
   .leg-row.solo { background:rgba(45,212,191,0.14); }
   .leg-row .tag { font-size:10px; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
   .leg-row .cnt { margin-left:auto; color:var(--muted); font-size:11px; }
-  .ctx-menu { position:fixed; z-index:20; min-width:150px; background:#141624; border:1px solid var(--border);
-    border-radius:9px; padding:4px; box-shadow:0 12px 30px rgba(0,0,0,0.5); display:flex; flex-direction:column; }
-  .ctx-menu button { background:none; border:none; color:var(--ink); text-align:left; font:inherit; font-size:12.5px;
-    padding:6px 10px; border-radius:6px; cursor:pointer; }
-  .ctx-menu button:hover, .ctx-menu button:focus { background:rgba(45,212,191,0.16); outline:none; }
   #detail { top:58px; right:0; bottom:0; width:min(400px,86vw); background:var(--panel);
     border-left:1px solid var(--border); backdrop-filter:blur(10px); padding:18px 18px 28px;
     overflow-y:auto; transform:translateX(100%); transition:transform .22s ease; }
@@ -95,7 +90,7 @@
 <div class="hud" id="legend" role="region" aria-label="Projects">
   <div id="legend-head"><h2>Projects</h2><button type="button" id="clear-filters" hidden onclick="setFilter(ProjectFilter.reset())">show all</button></div>
   <div id="legend-rows" role="list"></div>
-  <div id="legend-foot">click: mute · right-click / Shift+F10: solo, mute</div>
+  <div id="legend-foot">left-click to mute · right-click or Shift+F10 to solo</div>
 </div>
 <div class="hud" id="detail"><button class="close" onclick="closeDetail()">×</button><div id="detail-body"></div></div>
 <div class="hud" id="hint">drag to rotate · scroll to zoom · click a node</div>
@@ -290,11 +285,9 @@ function buildLegend(){
     el.innerHTML=`<span class="dot" style="background:${col};color:${col}"></span>`+
       `<span class="name">${esc(m.display_name||pk.split('/').pop())}</span><span class="tag"></span>`+
       `<span class="cnt">${counts[pk]||0}</span>`;
-    el.onclick=()=>setFilter(ProjectFilter.toggleMute(filterState,pk));
-    el.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); setFilter(ProjectFilter.toggleMute(filterState,pk)); }
-      else if(e.key==="ArrowDown"&&el.nextElementSibling){ e.preventDefault(); el.nextElementSibling.focus(); }
+    el.addEventListener("keydown",e=>{ if(e.key==="ArrowDown"&&el.nextElementSibling){ e.preventDefault(); el.nextElementSibling.focus(); }
       else if(e.key==="ArrowUp"&&el.previousElementSibling){ e.preventDefault(); el.previousElementSibling.focus(); } });
-    attachProjectMenu(el,pk,()=>filterState,setFilter);
+    attachProjectControls(el,pk,()=>filterState,setFilter);
     rows.appendChild(el);
     if(pk===focusedKey) el.focus();
   });

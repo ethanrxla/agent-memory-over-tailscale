@@ -1,5 +1,5 @@
 /* Live dashboard: periodic refresh plus project mute/solo (needs ProjectFilter
- * and attachProjectMenu). The page is server-rendered, so a refresh re-fetches
+ * and attachProjectControls). The page is server-rendered, so a refresh re-fetches
  * the same URL with no-store and swaps only the live regions -- the search box
  * and scroll positions are left alone. Keep this file free of the dollar sign:
  * it is inlined after string.Template substitution, but stay consistent.
@@ -48,7 +48,7 @@
   function wireProjects() {
     document.querySelectorAll("tr.project-row").forEach(function (tr) {
       var key = tr.getAttribute("data-project");
-      attachProjectMenu(tr, key, function () { return state; }, setState);
+      attachProjectControls(tr, key, function () { return state; }, setState);
       tr.addEventListener("keydown", function (e) {
         if (e.key === "ArrowDown" && tr.nextElementSibling) { e.preventDefault(); tr.nextElementSibling.focus(); }
         else if (e.key === "ArrowUp" && tr.previousElementSibling) { e.preventDefault(); tr.previousElementSibling.focus(); }
