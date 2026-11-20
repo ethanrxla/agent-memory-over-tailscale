@@ -68,7 +68,8 @@
 
   function toggleSolo(state, key) {
     var s = normalize(state);
-    return { muted: s.muted, solo: s.solo === key ? null : key };
+    if (s.solo === key) { return empty(); }
+    return { muted: s.muted, solo: key };
   }
 
   function showAll(state) { return { muted: normalize(state).muted, solo: null }; }

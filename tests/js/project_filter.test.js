@@ -30,7 +30,7 @@ s = PF.toggleMute(PF.empty(), "a");
 s = PF.toggleSolo(s, "a");
 assert.ok(PF.isVisible(s, "a") && !PF.isVisible(s, "b"));
 assert.ok(PF.isSolo(s, "a"));
-assert.equal(PF.toggleSolo(s, "a").solo, null);
+assert.deepEqual(PF.toggleSolo(s, "a"), PF.empty());
 assert.equal(PF.toggleSolo(s, "b").solo, "b");
 assert.equal(PF.showAll(s).solo, null);
 assert.deepEqual(PF.showAll(s).muted, ["a"]); // show all clears solo, not mutes
@@ -46,6 +46,10 @@ s = PF.toggleSolo({ muted: ["a", "b", "archived"], solo: null }, "a");
 s = PF.toggleMute(s, "b", ["a", "b", "c"]);
 assert.deepEqual(s, { muted: ["archived", "c"], solo: null });
 assert.deepEqual(PF.toggleMute(s, "b").muted, ["archived", "c", "b"]);
+
+// Re-solo after expanding a selection, then unsolo to restore every channel.
+s = PF.toggleSolo(s, "b");
+assert.deepEqual(PF.toggleSolo(s, "b"), PF.empty());
 
 // functions never mutate their input
 const frozen = Object.freeze({ muted: Object.freeze(["x"]), solo: null });

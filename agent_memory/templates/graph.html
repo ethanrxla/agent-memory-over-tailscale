@@ -31,8 +31,10 @@
     border-radius:12px; padding:10px 6px 8px 12px; backdrop-filter:blur(8px); }
   #legend-head { display:flex; align-items:center; gap:8px; flex:0 0 auto; margin:0 6px 8px 0; }
   #legend h2 { margin:0; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
-  #clear-filters { flex:none; margin:0 6px 6px 0; padding:6px; background:transparent; color:var(--ink);
-    border:1px solid var(--border); font:inherit; justify-content:space-between; }
+  #clear-filters { flex:none; margin-right:6px; background-color:transparent; color:inherit;
+    border:0; font-family:inherit; text-align:left; }
+  #clear-filters:hover { background:rgba(255,255,255,0.05); }
+  #clear-filters .dot { background:currentColor; }
   #legend-rows { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-right:6px; }
   #legend-foot { flex:0 0 auto; color:var(--muted); font-size:11px; margin:8px 6px 0 0; }
   .leg-row { display:flex; align-items:center; gap:8px; padding:3px 4px; font-size:12.5px; cursor:pointer;
@@ -88,7 +90,7 @@
 </div>
 <div class="hud" id="legend" role="region" aria-label="Projects">
   <div id="legend-head"><h2>Projects</h2></div>
-  <button type="button" class="leg-row" id="clear-filters" onclick="setFilter(ProjectFilter.reset())"><strong>Master</strong><span class="tag">Show all projects</span></button>
+  <button type="button" class="leg-row" id="clear-filters" title="Show all projects" aria-label="Master: show all projects" onclick="setFilter(ProjectFilter.reset())"><span class="dot" aria-hidden="true"></span><span class="name">Master</span></button>
   <div id="legend-rows" role="list"></div>
   <div id="legend-foot">left-click to mute · right-click or Shift+F10 to solo</div>
 </div>
