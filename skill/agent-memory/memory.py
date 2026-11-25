@@ -750,12 +750,15 @@ def watcher_state(spool: Path | None = None) -> dict[str, Any]:
     return data
 
 
-def collect_status(*, use_cache: bool = False) -> dict[str, Any]:
+def collect_status(*, use_cache: bool = False, started: str | None = None) -> dict[str, Any]:
     cfg = load_config()
     if _OPTS.get("hub"):
         cands = [(_norm(_OPTS["hub"]), "--hub")]
     else:
         cands = candidate_hubs(cfg)
+    if started and _norm(started) not in {u for u, _ in cands}:
+        # A hub --start-local just brought up for this run; never persisted.
+        cands = cands + [(_norm(started), "--start-local")]
     res = resolve_hub(cands, use_cache=use_cache)
     selected = res["selected"]
     hub_counts = None
@@ -785,8 +788,8 @@ def collect_status(*, use_cache: bool = False) -> dict[str, Any]:
 def cmd_status(a):
     st = collect_status(use_cache=False)
     if not st["selected"] and _OPTS.get("start_local") and st["local_hub_code"]:
-        select_hub(force_refresh=True)  # starts the local hub (or exits explaining why)
-        st = collect_status(use_cache=False)
+        url = select_hub(force_refresh=True)  # starts the local hub (or exits explaining why)
+        st = collect_status(use_cache=False, started=url)
     if getattr(a, "json", False):
         print(json.dumps(st, indent=2, default=str))
         return 0 if st["selected"] else EXIT_NO_HUB

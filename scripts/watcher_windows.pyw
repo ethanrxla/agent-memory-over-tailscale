@@ -7,9 +7,9 @@ lock file keeps a second logon/trigger from starting a duplicate watcher.
 
 The hub is resolved like every other client (watcher.daemon.build_client):
 AGENT_MEMORY_URL (user-level env var; comma-separated allowed) is the preferred
-hub, then ``hubs`` from ~/.agent-memory/config.json, then the built-in
-defaults. Each cycle delivers to the first one answering /health and keeps
-spooling while none does. The shared key, if used, comes only from the
+hub, then ``hubs`` from ~/.agent-memory/config.json (no hubs are built in).
+Each cycle delivers to the first one answering /health and keeps spooling
+while none does, or while none is configured yet. The shared key, if used, comes only from the
 AGENT_MEMORY_SHARED_KEY user env var. Extra CLI args are passed through
 (e.g. --no-fallback to pin AGENT_MEMORY_URL).
 """

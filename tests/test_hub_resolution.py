@@ -325,6 +325,35 @@ def test_watcher_spools_until_a_hub_comes_up_then_delivers_there(tmp_path: Path)
     spool.close()
 
 
+def test_watcher_runs_offline_when_no_hub_is_configured(tmp_path: Path) -> None:
+    # A fresh install has no built-in hubs: the watcher must still start and
+    # spool transcripts until a hub is configured, not crash on launch.
+    client = build_client(None, "")
+    assert client.candidates == [] and client.health() is False
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    stats = deliver(spool, client)
+    assert stats["delivered"] == 0 and spool.pending_count() == 1
+    state: dict = {}
+    write_state(spool, client, {**stats, "pending": 1}, state)
+    saved = json.loads((tmp_path / "watcher-state.json").read_text())
+    assert saved["hub"] is None and saved["candidates"] == []
+    spool.close()
+
+
+def test_status_start_local_reports_the_started_hub(tmp_path: Path, monkeypatch) -> None:
+    started = "http://me:8787"
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({started}))
+    monkeypatch.setattr(memory, "find_local_hub_code", lambda cfg=None: tmp_path)
+    monkeypatch.setattr(memory, "start_local_hub", lambda cfg=None, **k: started)
+    monkeypatch.setattr(memory, "tailscale_address", lambda: {"ip": None, "dns": None})
+    monkeypatch.setattr(memory, "_http", lambda *a, **k: {"counts": {}})
+    with redirect_stdout(io.StringIO()) as out:
+        assert memory.main(["--start-local", "status"]) == 0
+    assert "selected hub: " + started in out.getvalue()
+    assert memory.candidate_hubs(memory.load_config(), {}) == []  # nothing persisted
+
+
 def test_watcher_build_client_uses_shared_candidates(monkeypatch) -> None:
     monkeypatch.delenv("AGENT_MEMORY_URL", raising=False)
     client = build_client(C, "")
