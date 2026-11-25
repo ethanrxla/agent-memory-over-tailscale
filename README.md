@@ -50,12 +50,15 @@ whose `GET /health` answers within a couple of seconds (cached ~2 min):
 
 1. `AGENT_MEMORY_URL` (user env var; comma-separated list allowed),
 2. `hubs` in `~/.agent-memory/config.json`,
-3. built-in defaults: `pop-os.tailf11891.ts.net:8787`, then
-   `rxla-pc-1.tailf11891.ts.net:8787` (the same dual-boot PC under each OS).
+3. `DEFAULT_HUBS` in `memory.py`, which ships empty, so a fresh install probes
+   only what you configure (`"include_defaults": false` skips it in a private
+   copy that fills it in).
+
+List every hub a device should try, preferred first:
 
 ```json
-{"hubs": ["http://pop-os.tailf11891.ts.net:8787"],
- "local_hub": {"repo": "C:/Users/ethan/Projects/agent-memory-over-tailscale", "port": 8787}}
+{"hubs": ["http://hub.your-tailnet.ts.net:8787", "http://backup.your-tailnet.ts.net:8787"],
+ "local_hub": {"repo": "C:/Users/you/Projects/agent-memory-over-tailscale", "port": 8787}}
 ```
 
 `python3 memory.py status` shows every hub tried (with its error), the

@@ -76,9 +76,12 @@ def test_config_can_drop_defaults(tmp_path: Path) -> None:
     assert memory.candidate_hubs(memory.load_config(), {}) == [(B, "config")]
 
 
-def test_defaults_include_both_boots_of_the_pc() -> None:
-    hosts = " ".join(memory.DEFAULT_HUBS)
-    assert "pop-os" in hosts and "rxla-pc-1" in hosts
+def test_no_hubs_are_built_in() -> None:
+    # The skill ships to other people's machines: it must never probe the
+    # author's own hubs. With nothing configured there is nothing to try.
+    assert memory.DEFAULT_HUBS == ()
+    assert memory.candidate_hubs({}, {}) == []
+    assert "none configured" in memory.format_tried([])
 
 
 def test_shared_key_is_never_read_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

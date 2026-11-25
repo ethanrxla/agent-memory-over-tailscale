@@ -292,8 +292,8 @@ def build_client(backend_url: str | None, shared_key: str, no_fallback: bool = F
     """A client that delivers to the first healthy configured hub.
 
     Candidates, in order: --backend-url / AGENT_MEMORY_URL, then ``hubs`` from
-    ~/.agent-memory/config.json, then the built-in defaults -- the same list
-    memory.py and the MCP server use. --no-fallback pins the first one.
+    ~/.agent-memory/config.json, then DEFAULT_HUBS (empty as shipped) -- the
+    same list memory.py and the MCP server use. --no-fallback pins the first one.
     """
     from agent_memory.hubs import load_resolver
 
