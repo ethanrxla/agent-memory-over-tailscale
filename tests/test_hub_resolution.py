@@ -387,6 +387,24 @@ def test_offline_watcher_follows_a_corrected_hub_address(tmp_path: Path, monkeyp
     spool.close()
 
 
+def test_watcher_started_with_a_bad_hub_follows_the_correction(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_MEMORY_URL", raising=False)
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({B}))
+    _write_config(tmp_path, {"hubs": ["http://[::1"]})  # malformed when the watcher starts
+    client = build_client(None, "")
+    assert client.candidates  # started with a candidate, not empty
+    client.send_events = lambda session, events: {}
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    assert deliver(spool, client)["delivered"] == 0
+    _write_config(tmp_path, {"hubs": [B]})  # corrected while running
+    assert deliver(spool, client)["delivered"] == 1 and client.base_url == B
+    _write_config(tmp_path, {"hubs": [A]})  # after a hub answered, the list stays put
+    client.health()
+    assert [u for u, _ in client.candidates] == [B]
+    spool.close()
+
+
 def test_status_start_local_reports_the_started_hub(tmp_path: Path, monkeypatch) -> None:
     started = "http://me:8787"
     monkeypatch.setattr(memory, "probe_hub", fake_probe({started}))

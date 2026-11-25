@@ -47,9 +47,10 @@ class ResolvingHubClient(HubClient):
     first healthy one. So the watcher delivers to whichever configured hub is
     up, moves back to the preferred hub as soon as it returns, and -- when none
     answers, or none is configured yet -- reports unhealthy so the spool simply
-    keeps growing. A client that starts with no candidates asks ``refresh`` (if
-    given) again on each ``health()`` until a hub answers, so a hub added to or
-    corrected in the config later is picked up without restarting the watcher.
+    keeps growing. Until a hub first answers, ``health()`` asks ``refresh`` (if
+    given) for the candidates again each cycle, so a hub added to or corrected in
+    the config is picked up without restarting the watcher; after that the list
+    stays as it was.
     """
 
     def __init__(self, candidates: list[tuple[str, str]], shared_key: str = "",
@@ -59,7 +60,7 @@ class ResolvingHubClient(HubClient):
         self.candidates = list(candidates)
         self._resolve = resolve
         self._refresh = refresh
-        self._live = refresh is not None and not candidates  # re-read config until a hub answers
+        self._live = refresh is not None  # re-read config until a hub first answers
         self.selected: str | None = None
         self.last_tried: list[dict[str, Any]] = []
 
