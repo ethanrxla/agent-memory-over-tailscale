@@ -341,6 +341,26 @@ def test_watcher_runs_offline_when_no_hub_is_configured(tmp_path: Path) -> None:
     spool.close()
 
 
+def test_offline_watcher_picks_up_a_hub_added_to_config(tmp_path: Path, monkeypatch) -> None:
+    # Installed before any hub was configured: the same running client must
+    # start delivering once a hub is added to config.json, without a restart.
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({A, B}))
+    client = build_client(None, "")
+    pinned = build_client(None, "", no_fallback=True)
+    sent: list[tuple[str, int]] = []
+    client.send_events = lambda session, events: sent.append((client.base_url, len(events))) or {}
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    assert deliver(spool, client)["delivered"] == 0 and spool.pending_count() == 1
+
+    _write_config(tmp_path, {"hubs": [A, B]})
+    stats = deliver(spool, client)
+    assert stats["delivered"] == 1 and sent == [(A, 1)] and spool.pending_count() == 0
+    assert client.primary == A
+    assert pinned.health() is True and pinned.candidates == [(A, "config")]  # --no-fallback still pins one
+    spool.close()
+
+
 def test_status_start_local_reports_the_started_hub(tmp_path: Path, monkeypatch) -> None:
     started = "http://me:8787"
     monkeypatch.setattr(memory, "probe_hub", fake_probe({started}))

@@ -47,14 +47,18 @@ class ResolvingHubClient(HubClient):
     first healthy one. So the watcher delivers to whichever configured hub is
     up, moves back to the preferred hub as soon as it returns, and -- when none
     answers, or none is configured yet -- reports unhealthy so the spool simply
-    keeps growing.
+    keeps growing. With no candidates, ``refresh`` (if given) is asked again on
+    each ``health()``, so a hub added to the config later is picked up without
+    restarting the watcher.
     """
 
     def __init__(self, candidates: list[tuple[str, str]], shared_key: str = "",
-                 timeout: float = 30.0, resolve: Callable[..., dict[str, Any]] | None = None) -> None:
+                 timeout: float = 30.0, resolve: Callable[..., dict[str, Any]] | None = None,
+                 refresh: Callable[[], list[tuple[str, str]]] | None = None) -> None:
         super().__init__(candidates[0][0] if candidates else "", shared_key, timeout)
         self.candidates = list(candidates)
         self._resolve = resolve
+        self._refresh = refresh
         self.selected: str | None = None
         self.last_tried: list[dict[str, Any]] = []
 
@@ -63,6 +67,10 @@ class ResolvingHubClient(HubClient):
         return self.candidates[0][0].rstrip("/") if self.candidates else None
 
     def health(self) -> bool:
+        if not self.candidates and self._refresh is not None:
+            self.candidates = list(self._refresh())
+            if self.candidates:
+                self.base_url = self.candidates[0][0].rstrip("/")
         if not self.candidates:  # no hub configured yet: stay offline, keep spooling
             self.selected = None
             self.last_tried = []

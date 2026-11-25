@@ -303,14 +303,17 @@ def build_client(backend_url: str | None, shared_key: str, no_fallback: bool = F
     env = dict(os.environ)
     if backend_url:
         env["AGENT_MEMORY_URL"] = backend_url
-    candidates = resolver.candidate_hubs(resolver.load_config(), env)
+
+    def current() -> list[tuple[str, str]]:
+        found = resolver.candidate_hubs(resolver.load_config(), env)
+        return found[:1] if no_fallback else found
+
+    candidates = current()
     if not candidates:
         print("[watcher] no hub configured (set AGENT_MEMORY_URL or \"hubs\" in "
               f"{resolver.config_path()}); spooling until one is", file=sys.stderr, flush=True)
-    if no_fallback:
-        candidates = candidates[:1]
     key = shared_key or resolver.shared_key(resolver.load_config())
-    return ResolvingHubClient(candidates, key, resolve=resolver.resolve_hub)
+    return ResolvingHubClient(candidates, key, resolve=resolver.resolve_hub, refresh=current)
 
 
 def write_state(spool: Spool, client: HubClient, result: dict[str, int], state: dict[str, Any]) -> None:
