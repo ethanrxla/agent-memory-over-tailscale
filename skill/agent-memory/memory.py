@@ -120,6 +120,8 @@ def candidate_hubs(cfg: dict[str, Any] | None = None,
     hubs = cfg.get("hubs") or []
     if isinstance(hubs, str):
         hubs = [hubs]
+    elif not isinstance(hubs, (list, tuple)):
+        hubs = []  # malformed setting: ignore it rather than crash every client
     for url in hubs:
         add(url, "config")
     if cfg.get("include_defaults", True):
@@ -143,11 +145,11 @@ def probe_hub(url: str, key: str = "", timeout: float | None = None) -> dict[str
     """GET <url>/health. Returns {url, ok, error, ms}; never raises."""
     timeout = probe_timeout() if timeout is None else timeout
     started = time.monotonic()
-    req = urllib.request.Request(url.rstrip("/") + "/health", method="GET")
-    if key:
-        req.add_header("X-Shared-Key", key)
     result: dict[str, Any] = {"url": url, "ok": False, "error": None, "ms": None}
     try:
+        req = urllib.request.Request(url.rstrip("/") + "/health", method="GET")  # bad URL: ValueError
+        if key:
+            req.add_header("X-Shared-Key", key)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace") or "{}")
         if isinstance(body, dict) and body.get("status") == "ok":

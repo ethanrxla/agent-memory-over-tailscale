@@ -361,6 +361,32 @@ def test_offline_watcher_picks_up_a_hub_added_to_config(tmp_path: Path, monkeypa
     spool.close()
 
 
+def test_offline_watcher_survives_bad_hub_settings(tmp_path: Path) -> None:
+    # A typo in config.json while the watcher waits for a hub must leave it
+    # offline and spooling, not kill it. Real probes, no network needed.
+    client = build_client(None, "")
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    for bad in (8787, ["http://[::1"]):  # not a list; malformed IPv6 URL
+        _write_config(tmp_path, {"hubs": bad})
+        assert deliver(spool, client)["delivered"] == 0 and spool.pending_count() == 1
+    assert memory.probe_hub("http://[::1")["ok"] is False  # never raises
+    spool.close()
+
+
+def test_offline_watcher_follows_a_corrected_hub_address(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({B}))
+    client = build_client(None, "")
+    client.send_events = lambda session, events: {}
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    _write_config(tmp_path, {"hubs": [A]})  # wrong address first
+    assert deliver(spool, client)["delivered"] == 0
+    _write_config(tmp_path, {"hubs": [B]})  # corrected while running
+    assert deliver(spool, client)["delivered"] == 1 and client.base_url == B
+    spool.close()
+
+
 def test_status_start_local_reports_the_started_hub(tmp_path: Path, monkeypatch) -> None:
     started = "http://me:8787"
     monkeypatch.setattr(memory, "probe_hub", fake_probe({started}))
