@@ -7,7 +7,11 @@ device a single pull over the tailnet the agent already talks to.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
+from agent_memory.app import create_app
 
 
 def test_skill_files_are_served(client: TestClient) -> None:
@@ -29,6 +33,20 @@ def test_installer_script_is_served_and_runnable(client: TestClient) -> None:
     assert r.text.startswith("#!")
     assert ".claude/skills/agent-memory" in r.text
     assert ".codex/skills/agent-memory" in r.text
+
+
+def test_installer_has_no_built_in_hub(tmp_path: Path) -> None:
+    """With no public URL the installer uses the device's AGENT_MEMORY_URL or stops."""
+    def installer(public_url: str, name: str) -> str:
+        app = create_app(db_path=str(tmp_path / name), shared_key="",
+                         worker_enabled=False, public_url=public_url)
+        return TestClient(app).get("/skill/install.sh").text
+
+    blank = installer("", "a.db")
+    assert 'HUB="${AGENT_MEMORY_URL:-}"' in blank
+    assert "no hub address" in blank and "exit 1" in blank
+    url = "http://hub.your-tailnet.ts.net:8787"
+    assert f'HUB="${{AGENT_MEMORY_URL:-{url}}}"' in installer(url, "b.db")
 
 
 def test_unknown_skill_files_are_refused(client: TestClient) -> None:

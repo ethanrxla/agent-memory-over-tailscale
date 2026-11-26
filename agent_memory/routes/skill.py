@@ -26,6 +26,13 @@ INSTALL_SH = """#!/usr/bin/env bash
 # Install/update the agent-memory skill from the hub. Safe to re-run.
 set -euo pipefail
 HUB="${AGENT_MEMORY_URL:-%(hub)s}"
+HUB="${HUB%%%%,*}"  # AGENT_MEMORY_URL may list several hubs: use the first
+if [ -z "$HUB" ]; then
+  echo "agent-memory: no hub address. Set AGENT_MEMORY_URL to your hub on your tailnet" >&2
+  echo "  (e.g. http://<hub-device>.<your-tailnet>.ts.net:8787) and re-run, or set" >&2
+  echo "  AGENT_MEMORY_PUBLIC_URL on the hub so its installer carries the address." >&2
+  exit 1
+fi
 for dest in "$HOME/.claude/skills/agent-memory" "$HOME/.codex/skills/agent-memory"; do
   parent="$(dirname "$dest")"
   [ -d "$parent" ] || continue
@@ -48,7 +55,7 @@ def _skill_dir() -> Path:
 def register(app: FastAPI, ctx: AppContext) -> None:
     @app.get("/skill/install.sh", response_class=PlainTextResponse)
     def install_script(_: None = Depends(ctx.require_key_dep())) -> PlainTextResponse:
-        hub = ctx.config.public_url or "http://pop-os.tailf11891.ts.net:8787"
+        hub = ctx.config.public_url  # empty: the script asks for AGENT_MEMORY_URL
         return PlainTextResponse(
             INSTALL_SH % {"hub": hub}, media_type="text/x-shellscript; charset=utf-8"
         )

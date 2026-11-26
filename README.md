@@ -18,7 +18,7 @@ It solves three problems at once:
 ## How it works
 
 ```
-hub (pop-os, or rxla-pc-1)       per-device watcher            per-agent
+hub (always on, your tailnet)    per-device watcher            per-agent
 ┌────────────────────────┐       ┌──────────────────┐     ┌──────────────────┐
 │ FastAPI  :8787         │◄──────│ tail *.jsonl     │     │ agent-memory     │
 │ SQLite + FTS5 + vec0   │ over  │ filter → redact  │     │   skill          │
@@ -76,8 +76,8 @@ Two hubs means two databases. Push what landed on the fallback hub to the
 preferred one when both are up:
 
 ```bash
-python3 skill/agent-memory/memory.py sync --from http://rxla-pc-1.tailf11891.ts.net:8787 \
-                                         --to   http://pop-os.tailf11891.ts.net:8787 [--since 2026-11-01] [--dry-run]
+python3 skill/agent-memory/memory.py sync --from http://backup.your-tailnet.ts.net:8787 \
+                                         --to   http://hub.your-tailnet.ts.net:8787 [--since 2026-11-01] [--dry-run]
 ```
 
 `sync` reads `/v1/export/...` from the source and re-posts through the normal
@@ -88,11 +88,32 @@ device's transcripts instead, run the watcher with a fresh spool:
 
 ## Quick start
 
-Run the hub on the usual always-on node (e.g. `pop-os`; clients fall back to
+Run the hub on one always-on machine on your tailnet (clients fall back to
 other configured hubs when it is down):
 
 ```bash
 docker compose up -d --build
+```
+
+The hub listens on `127.0.0.1:8787` only, so put it on your tailnet with
+[Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve), which
+lets only devices on your tailnet reach it:
+
+```bash
+tailscale serve --bg --http=8787 http://127.0.0.1:8787
+```
+
+The hub is now at its MagicDNS name, `http://hub.your-tailnet.ts.net:8787` with
+the hub machine's name in place of `hub` and your tailnet's in place of
+`your-tailnet` (`tailscale status --json` on the hub shows it as `Self.DNSName`,
+without the `:8787`). Check it from another device with
+`curl http://hub.your-tailnet.ts.net:8787/health` and use that address
+everywhere below. Give it to the hub as well, so the installer it serves
+(`/skill/install.sh`) carries it:
+
+```bash
+export AGENT_MEMORY_PUBLIC_URL=http://hub.your-tailnet.ts.net:8787
+docker compose up -d
 ```
 
 Optionally add free NVIDIA NIM credentials for semantic search and prose
@@ -107,7 +128,7 @@ Install the watcher on each device:
 
 ```bash
 ./scripts/install_watcher.sh \
-  --backend-url http://memory-host.tailnet.ts.net:8787 \
+  --backend-url http://hub.your-tailnet.ts.net:8787 \
   --shared-key your-shared-key \
   --backfill        # ingest transcripts already on disk, then run as a service
 ```
@@ -116,7 +137,7 @@ Generate MCP client configs:
 
 ```bash
 ./scripts/install.sh \
-  --backend-url http://memory-host.tailnet.ts.net:8787 \
+  --backend-url http://hub.your-tailnet.ts.net:8787 \
   --shared-key your-shared-key \
   --device laptop --device desktop
 ```

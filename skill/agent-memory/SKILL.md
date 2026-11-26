@@ -12,16 +12,17 @@ description: >-
 
 # Shared Agent Memory
 
-One memory store shared by every Claude/Codex/Hermes session on the Tailscale
-network. Pull a short, project-scoped brief instead of re-reading transcripts,
+One memory store shared by every Claude/Codex/Hermes session on the user's own
+tailnet. Pull a short, project-scoped brief instead of re-reading transcripts,
 and search prior work semantically. All commands go through the bundled
 `memory.py` (stdlib only).
 
 ## Which hub: run `status` first
 
-There is **no fixed hub**. Every command probes the candidates in order
-(`AGENT_MEMORY_URL`, comma-separated allowed; then `hubs` in
-`~/.agent-memory/config.json`) and uses the first one whose `/health` answers.
+The hub runs on **the user's own tailnet**; none is built in. Every command
+probes the candidates in order (`AGENT_MEMORY_URL`, comma-separated allowed;
+then `hubs` in `~/.agent-memory/config.json`) and uses the first one whose
+`/health` answers.
 
 ```bash
 python3 memory.py status        # hubs tried + errors, selected hub, watcher, spool backlog
@@ -37,9 +38,13 @@ python3 memory.py status        # hubs tried + errors, selected hub, watcher, sp
   the preferred hub. Once both are up:
   `python3 memory.py sync --from <fallback> --to <preferred>` (idempotent, safe
   to re-run; `--dry-run` to preview).
-- If `status` shows no hubs configured at all, ask the user for their hub's
-  address, then help them set `AGENT_MEMORY_URL` (or `hubs` in
-  `~/.agent-memory/config.json`) to it.
+- If `status` shows no hubs configured at all, point setup at the user's own
+  tailnet. `tailscale status` lists their devices and `tailscale status --json`
+  gives each one's MagicDNS name (`DNSName`, like `hub.their-tailnet.ts.net.`;
+  drop the trailing dot). Ask which device runs the hub, confirm
+  `http://<that name>:8787` with the user, check it with `curl <url>/health`,
+  then set `AGENT_MEMORY_URL` (or `hubs` in `~/.agent-memory/config.json`) to
+  it. Never use an address from an example, a README or someone else's setup.
 
 Invoke `memory.py` by absolute path from the project directory, or put
 `--cwd <project-path>` BEFORE the subcommand. Scope comes from that project's

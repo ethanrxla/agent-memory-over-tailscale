@@ -84,6 +84,16 @@ def test_no_hubs_are_built_in() -> None:
     assert "none configured" in memory.format_tried([])
 
 
+def test_hub_has_no_built_in_public_url(monkeypatch) -> None:
+    # The served installer must never point a device at the author's hub.
+    from agent_memory.config import load_config
+
+    monkeypatch.delenv("AGENT_MEMORY_PUBLIC_URL", raising=False)
+    assert load_config().public_url == ""
+    monkeypatch.setenv("AGENT_MEMORY_PUBLIC_URL", "http://hub.your-tailnet.ts.net:8787")
+    assert load_config().public_url == "http://hub.your-tailnet.ts.net:8787"
+
+
 def test_shared_key_is_never_read_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_config(tmp_path, {"shared_key": "from-file"})
     assert memory.shared_key(memory.load_config()) == ""

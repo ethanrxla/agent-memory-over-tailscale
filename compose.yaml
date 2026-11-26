@@ -5,6 +5,9 @@ services:
     environment:
       AGENT_MEMORY_DB_PATH: /data/agent_memory.db
       AGENT_MEMORY_SHARED_KEY: ${AGENT_MEMORY_SHARED_KEY:-}
+      # This hub's address on your tailnet (e.g. http://hub.your-tailnet.ts.net:8787),
+      # baked into the installer it serves. Unset: devices need AGENT_MEMORY_URL.
+      AGENT_MEMORY_PUBLIC_URL: ${AGENT_MEMORY_PUBLIC_URL:-}
       # Optional NVIDIA NIM credentials. Without them the hub runs keyword-only
       # retrieval and extractive summaries -- fully functional, just not semantic.
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}

@@ -50,7 +50,7 @@ PROJECTS = {
         {"project_key": "path:/home/theif", "session_count": 4, "repo_root": None},
         {"project_key": r"path:C:\Users\theif", "session_count": 15, "repo_root": None},
         {"project_key": "github.com/ethanrxla/mrie", "session_count": 32,
-         "repo_root": "/home/ethanrisden/mrie"},
+         "repo_root": "/home/me/mrie"},
         {"project_key": "path:/Volumes/T7 Shield/T7 shield/RedLamb-build",
          "session_count": 0, "repo_root": None},
     ]
