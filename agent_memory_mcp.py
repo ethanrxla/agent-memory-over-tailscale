@@ -53,9 +53,10 @@ class AgentMemoryHttpClient:
     """HTTP client that talks to the first reachable configured hub.
 
     An explicit ``base_url`` pins one hub. Otherwise the hub is resolved lazily
-    (AGENT_MEMORY_URL, then ~/.agent-memory/config.json ``hubs``, then the
-    defaults -- the same order as memory.py and the watcher) on the first
-    request, and re-resolved once if that hub stops answering.
+    (AGENT_MEMORY_URL, then ~/.agent-memory/config.json ``hubs``, then
+    DEFAULT_HUBS, empty as shipped -- the same order as memory.py and the
+    watcher) on the first request, and re-resolved once if that hub stops
+    answering.
     """
 
     def __init__(self, base_url: str | None = None, shared_key: str | None = None) -> None:

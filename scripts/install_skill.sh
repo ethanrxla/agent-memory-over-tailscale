@@ -27,7 +27,7 @@ echo "  installed -> $HOME/.claude/commands/memory.md  (use: /memory)"
 cat <<TXT
 
 Done. The skill picks the first reachable hub from \$AGENT_MEMORY_URL, then
-~/.agent-memory/config.json "hubs", then the built-in defaults. Check with:
+~/.agent-memory/config.json "hubs" (no hubs are built in). Check with:
   python3 ~/.claude/skills/agent-memory/memory.py status
 
 Restart your agent client (or reload skills) to pick it up, then invoke the

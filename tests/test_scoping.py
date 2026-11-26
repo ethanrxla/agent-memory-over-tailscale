@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import publish, register
 
-C3PO = "path:/home/ethanrisden/c3po"
-RAMWARDEN = "path:/home/ethanrisden/ramwarden"
+C3PO = "path:/home/me/c3po"
+RAMWARDEN = "path:/home/me/ramwarden"
 
 
 def seed(client: TestClient) -> None:

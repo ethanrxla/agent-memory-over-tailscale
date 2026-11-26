@@ -76,9 +76,22 @@ def test_config_can_drop_defaults(tmp_path: Path) -> None:
     assert memory.candidate_hubs(memory.load_config(), {}) == [(B, "config")]
 
 
-def test_defaults_include_both_boots_of_the_pc() -> None:
-    hosts = " ".join(memory.DEFAULT_HUBS)
-    assert "pop-os" in hosts and "rxla-pc-1" in hosts
+def test_no_hubs_are_built_in() -> None:
+    # The skill ships to other people's machines: it must never probe the
+    # author's own hubs. With nothing configured there is nothing to try.
+    assert memory.DEFAULT_HUBS == ()
+    assert memory.candidate_hubs({}, {}) == []
+    assert "none configured" in memory.format_tried([])
+
+
+def test_hub_has_no_built_in_public_url(monkeypatch) -> None:
+    # The served installer must never point a device at the author's hub.
+    from agent_memory.config import load_config
+
+    monkeypatch.delenv("AGENT_MEMORY_PUBLIC_URL", raising=False)
+    assert load_config().public_url == ""
+    monkeypatch.setenv("AGENT_MEMORY_PUBLIC_URL", "http://hub.your-tailnet.ts.net:8787")
+    assert load_config().public_url == "http://hub.your-tailnet.ts.net:8787"
 
 
 def test_shared_key_is_never_read_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,6 +333,99 @@ def test_watcher_spools_until_a_hub_comes_up_then_delivers_there(tmp_path: Path)
     deliver(spool, client)
     assert client.sent[-1] == (A, 1)
     spool.close()
+
+
+def test_watcher_runs_offline_when_no_hub_is_configured(tmp_path: Path) -> None:
+    # A fresh install has no built-in hubs: the watcher must still start and
+    # spool transcripts until a hub is configured, not crash on launch.
+    client = build_client(None, "")
+    assert client.candidates == [] and client.health() is False
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    stats = deliver(spool, client)
+    assert stats["delivered"] == 0 and spool.pending_count() == 1
+    state: dict = {}
+    write_state(spool, client, {**stats, "pending": 1}, state)
+    saved = json.loads((tmp_path / "watcher-state.json").read_text())
+    assert saved["hub"] is None and saved["candidates"] == []
+    spool.close()
+
+
+def test_offline_watcher_picks_up_a_hub_added_to_config(tmp_path: Path, monkeypatch) -> None:
+    # Installed before any hub was configured: the same running client must
+    # start delivering once a hub is added to config.json, without a restart.
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({A, B}))
+    client = build_client(None, "")
+    pinned = build_client(None, "", no_fallback=True)
+    sent: list[tuple[str, int]] = []
+    client.send_events = lambda session, events: sent.append((client.base_url, len(events))) or {}
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    assert deliver(spool, client)["delivered"] == 0 and spool.pending_count() == 1
+
+    _write_config(tmp_path, {"hubs": [A, B]})
+    stats = deliver(spool, client)
+    assert stats["delivered"] == 1 and sent == [(A, 1)] and spool.pending_count() == 0
+    assert client.primary == A
+    assert pinned.health() is True and pinned.candidates == [(A, "config")]  # --no-fallback still pins one
+    spool.close()
+
+
+def test_offline_watcher_survives_bad_hub_settings(tmp_path: Path) -> None:
+    # A typo in config.json while the watcher waits for a hub must leave it
+    # offline and spooling, not kill it. Real probes, no network needed.
+    client = build_client(None, "")
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    for bad in (8787, ["http://[::1"]):  # not a list; malformed IPv6 URL
+        _write_config(tmp_path, {"hubs": bad})
+        assert deliver(spool, client)["delivered"] == 0 and spool.pending_count() == 1
+    assert memory.probe_hub("http://[::1")["ok"] is False  # never raises
+    spool.close()
+
+
+def test_offline_watcher_follows_a_corrected_hub_address(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({B}))
+    client = build_client(None, "")
+    client.send_events = lambda session, events: {}
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    _write_config(tmp_path, {"hubs": [A]})  # wrong address first
+    assert deliver(spool, client)["delivered"] == 0
+    _write_config(tmp_path, {"hubs": [B]})  # corrected while running
+    assert deliver(spool, client)["delivered"] == 1 and client.base_url == B
+    spool.close()
+
+
+def test_watcher_started_with_a_bad_hub_follows_the_correction(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_MEMORY_URL", raising=False)
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({B}))
+    _write_config(tmp_path, {"hubs": ["http://[::1"]})  # malformed when the watcher starts
+    client = build_client(None, "")
+    assert client.candidates  # started with a candidate, not empty
+    client.send_events = lambda session, events: {}
+    spool = Spool(tmp_path / "s.db")
+    spool.enqueue("sess", 1, {"session": {"session_id": "sess"}, "event": {"seq": 1}}); spool.commit()
+    assert deliver(spool, client)["delivered"] == 0
+    _write_config(tmp_path, {"hubs": [B]})  # corrected while running
+    assert deliver(spool, client)["delivered"] == 1 and client.base_url == B
+    _write_config(tmp_path, {"hubs": [A]})  # after a hub answered, the list stays put
+    client.health()
+    assert [u for u, _ in client.candidates] == [B]
+    spool.close()
+
+
+def test_status_start_local_reports_the_started_hub(tmp_path: Path, monkeypatch) -> None:
+    started = "http://me:8787"
+    monkeypatch.setattr(memory, "probe_hub", fake_probe({started}))
+    monkeypatch.setattr(memory, "find_local_hub_code", lambda cfg=None: tmp_path)
+    monkeypatch.setattr(memory, "start_local_hub", lambda cfg=None, **k: started)
+    monkeypatch.setattr(memory, "tailscale_address", lambda: {"ip": None, "dns": None})
+    monkeypatch.setattr(memory, "_http", lambda *a, **k: {"counts": {}})
+    with redirect_stdout(io.StringIO()) as out:
+        assert memory.main(["--start-local", "status"]) == 0
+    assert "selected hub: " + started in out.getvalue()
+    assert memory.candidate_hubs(memory.load_config(), {}) == []  # nothing persisted
 
 
 def test_watcher_build_client_uses_shared_candidates(monkeypatch) -> None:

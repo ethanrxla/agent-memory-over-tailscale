@@ -14,11 +14,11 @@ Usage:
   memory.py global-search "query"       # search across ALL projects
   memory.py sync --from URL --to URL    # copy sessions/entries hub -> hub (idempotent)
 
-Hub resolution: there is no single hard-coded hub. Candidates come, in order,
-from AGENT_MEMORY_URL (comma-separated allowed), then ``hubs`` in
-~/.agent-memory/config.json, then the built-in defaults. Each is probed with
-GET /health (short timeout) and the first healthy one is used; the choice is
-cached briefly. If none answers, the command fails with the list of hubs tried
+Hub resolution: there is no hard-coded hub. Candidates come, in order, from
+AGENT_MEMORY_URL (comma-separated allowed), then ``hubs`` in
+~/.agent-memory/config.json, then DEFAULT_HUBS (empty as shipped). Each is
+probed with GET /health (short timeout) and the first healthy one is used; the
+choice is cached briefly. If none answers, the command fails with the list of hubs tried
 -- ask the user which hub to use, or pass --start-local on a machine that has
 the hub code to start one bound to this device's Tailscale address.
 
@@ -48,13 +48,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-# The owner's PC dual-boots: Pop!_OS normally hosts the always-on hub, and the
-# same machine booted into Windows hosts a fallback. Order is preference only;
-# whichever answers /health first in this order wins.
-DEFAULT_HUBS: tuple[str, ...] = (
-    "http://pop-os.tailf11891.ts.net:8787",
-    "http://rxla-pc-1.tailf11891.ts.net:8787",
-)
+# No hubs are built in: each install points at its own hub(s) through
+# AGENT_MEMORY_URL or ``hubs`` in ~/.agent-memory/config.json. Add URLs here only
+# in a private copy, probed after those two (``"include_defaults": false`` in
+# config.json skips them).
+DEFAULT_HUBS: tuple[str, ...] = ()
 DEFAULT_PORT = 8787
 EXIT_NO_HUB = 3
 
@@ -122,6 +120,8 @@ def candidate_hubs(cfg: dict[str, Any] | None = None,
     hubs = cfg.get("hubs") or []
     if isinstance(hubs, str):
         hubs = [hubs]
+    elif not isinstance(hubs, (list, tuple)):
+        hubs = []  # malformed setting: ignore it rather than crash every client
     for url in hubs:
         add(url, "config")
     if cfg.get("include_defaults", True):
@@ -145,11 +145,11 @@ def probe_hub(url: str, key: str = "", timeout: float | None = None) -> dict[str
     """GET <url>/health. Returns {url, ok, error, ms}; never raises."""
     timeout = probe_timeout() if timeout is None else timeout
     started = time.monotonic()
-    req = urllib.request.Request(url.rstrip("/") + "/health", method="GET")
-    if key:
-        req.add_header("X-Shared-Key", key)
     result: dict[str, Any] = {"url": url, "ok": False, "error": None, "ms": None}
     try:
+        req = urllib.request.Request(url.rstrip("/") + "/health", method="GET")  # bad URL: ValueError
+        if key:
+            req.add_header("X-Shared-Key", key)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace") or "{}")
         if isinstance(body, dict) and body.get("status") == "ok":
@@ -247,7 +247,8 @@ def format_tried(tried: list[dict[str, Any]]) -> str:
     for i, t in enumerate(tried, 1):
         state = f"OK ({t.get('ms')} ms)" if t.get("ok") else f"unreachable: {t.get('error')}"
         lines.append(f"  {i}. {t['url']}  [{t.get('source', '?')}]  {state}")
-    return "\n".join(lines) or "  (no candidates configured)"
+    return "\n".join(lines) or ("  (none configured: set AGENT_MEMORY_URL, or \"hubs\" in "
+                                 f"{config_path()})")
 
 
 def no_hub_message(tried: list[dict[str, Any]], local_code: Path | None) -> str:
@@ -490,8 +491,8 @@ def _q(pk: str) -> str:
 
 
 # Directory names carry scaffolding words that bury the distinctive part of the
-# name: "RedLamb-build" scores 0.20 against the sessions that built RedLamb,
-# while "RedLamb" scores 1.00. Strip these before seeding a search.
+# name: "myapp-build" can score 0.20 against the sessions that built myapp,
+# while "myapp" scores 1.00. Strip these before seeding a search.
 _GENERIC_DIR_TOKENS = {
     "bin", "build", "builds", "code", "debug", "dist", "final", "master", "new",
     "obj", "old", "out", "output", "project", "projects", "release", "repo",
@@ -537,8 +538,8 @@ def _semantic_nearby(pk: str, cwd: str) -> dict[str, float]:
     """Neighbours that share no path or name overlap at all.
 
     The same project worked on from another machine lands under an unrelated
-    key -- RedLamb built on Windows lives under path:C:\\Users\\theif, which
-    has no substring in common with a /Volumes/.../RedLamb-build checkout.
+    key -- myapp built on Windows can live under path:C:\\Users\\me, which
+    has no substring in common with a /Volumes/.../myapp-build checkout.
     Only meaning connects them, so ask the hub by meaning.
     """
     seed = _search_seed(cwd)
@@ -751,12 +752,15 @@ def watcher_state(spool: Path | None = None) -> dict[str, Any]:
     return data
 
 
-def collect_status(*, use_cache: bool = False) -> dict[str, Any]:
+def collect_status(*, use_cache: bool = False, started: str | None = None) -> dict[str, Any]:
     cfg = load_config()
     if _OPTS.get("hub"):
         cands = [(_norm(_OPTS["hub"]), "--hub")]
     else:
         cands = candidate_hubs(cfg)
+    if started and _norm(started) not in {u for u, _ in cands}:
+        # A hub --start-local just brought up for this run; never persisted.
+        cands = cands + [(_norm(started), "--start-local")]
     res = resolve_hub(cands, use_cache=use_cache)
     selected = res["selected"]
     hub_counts = None
@@ -786,14 +790,15 @@ def collect_status(*, use_cache: bool = False) -> dict[str, Any]:
 def cmd_status(a):
     st = collect_status(use_cache=False)
     if not st["selected"] and _OPTS.get("start_local") and st["local_hub_code"]:
-        select_hub(force_refresh=True)  # starts the local hub (or exits explaining why)
-        st = collect_status(use_cache=False)
+        url = select_hub(force_refresh=True)  # starts the local hub (or exits explaining why)
+        st = collect_status(use_cache=False, started=url)
     if getattr(a, "json", False):
         print(json.dumps(st, indent=2, default=str))
         return 0 if st["selected"] else EXIT_NO_HUB
     cfg = st["config"]
     print("# agent-memory status")
-    print(f"config: {cfg['path']} ({'found' if cfg['found'] else 'not found, using env + defaults'})"
+    missing = "not found, using env" + (" + defaults" if DEFAULT_HUBS else "")
+    print(f"config: {cfg['path']} ({'found' if cfg['found'] else missing})"
           + (f"  ERROR: {cfg['error']}" if cfg.get("error") else ""))
     print(f"shared key: {st['shared_key']}")
     print("hubs tried (in preference order):")

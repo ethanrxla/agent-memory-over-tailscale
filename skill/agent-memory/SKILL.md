@@ -12,18 +12,17 @@ description: >-
 
 # Shared Agent Memory
 
-One memory store shared by every Claude/Codex/Hermes session on the Tailscale
-network. Pull a short, project-scoped brief instead of re-reading transcripts,
+One memory store shared by every Claude/Codex/Hermes session on the user's own
+tailnet. Pull a short, project-scoped brief instead of re-reading transcripts,
 and search prior work semantically. All commands go through the bundled
 `memory.py` (stdlib only).
 
 ## Which hub: run `status` first
 
-There is **no single fixed hub**. The owner's PC dual-boots: the hub usually
-runs on Pop!_OS (`pop-os`) and, when Windows is booted, on `rxla-pc-1`. Every
-command probes the candidates in order (`AGENT_MEMORY_URL`, comma-separated
-allowed; then `hubs` in `~/.agent-memory/config.json`; then those two
-defaults) and uses the first one whose `/health` answers.
+The hub runs on **the user's own tailnet**; none is built in. Every command
+probes the candidates in order (`AGENT_MEMORY_URL`, comma-separated allowed;
+then `hubs` in `~/.agent-memory/config.json`) and uses the first one whose
+`/health` answers.
 
 ```bash
 python3 memory.py status        # hubs tried + errors, selected hub, watcher, spool backlog
@@ -39,6 +38,13 @@ python3 memory.py status        # hubs tried + errors, selected hub, watcher, sp
   the preferred hub. Once both are up:
   `python3 memory.py sync --from <fallback> --to <preferred>` (idempotent, safe
   to re-run; `--dry-run` to preview).
+- If `status` shows no hubs configured at all, point setup at the user's own
+  tailnet. `tailscale status` lists their devices and `tailscale status --json`
+  gives each one's MagicDNS name (`DNSName`, like `hub.their-tailnet.ts.net.`;
+  drop the trailing dot). Ask which device runs the hub, confirm
+  `http://<that name>:8787` with the user, check it with `curl <url>/health`,
+  then set `AGENT_MEMORY_URL` (or `hubs` in `~/.agent-memory/config.json`) to
+  it. Never use an address from an example, a README or someone else's setup.
 
 Invoke `memory.py` by absolute path from the project directory, or put
 `--cwd <project-path>` BEFORE the subcommand. Scope comes from that project's
@@ -95,10 +101,12 @@ watcher; `decide` records a decision, not a session upload.
 - The per-device **watcher** tails Claude Code and Codex transcripts and the
   Hermes session store (`state.db`, via the watcher's Hermes adapter), redacts
   secrets locally, spools, and delivers to the first reachable hub.
+- On Linux it runs as a systemd user service, installed with
+  `scripts/install_watcher.sh --backend-url <hub>`. Logs:
+  `journalctl --user -u agent-memory-watcher`.
 - On Windows it runs as the **AgentMemoryWatcher** Scheduled Task, installed
   with `powershell -ExecutionPolicy Bypass -File scripts\install_watcher_windows.ps1`
   (add `-Uninstall` to remove). Log: `~/.cache/agent-memory/watcher.log`.
-- Device names: `RXLA_PC_1` (Windows) and `RXLA_PC_1-wsl` (WSL).
 - `status` shows whether the watcher is running, which hub it last delivered
   to, and the spool backlog. Verify ingestion (`sessions`) separately before
   reporting session sync as working.

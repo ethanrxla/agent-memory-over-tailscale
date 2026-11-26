@@ -46,29 +46,50 @@ class ResolvingHubClient(HubClient):
     candidates in preference order every cycle and points ``base_url`` at the
     first healthy one. So the watcher delivers to whichever configured hub is
     up, moves back to the preferred hub as soon as it returns, and -- when none
-    answers -- reports unhealthy so the spool simply keeps growing.
+    answers, or none is configured yet -- reports unhealthy so the spool simply
+    keeps growing. Until a hub first answers, ``health()`` asks ``refresh`` (if
+    given) for the candidates again each cycle, so a hub added to or corrected in
+    the config is picked up without restarting the watcher; after that the list
+    stays as it was.
     """
 
     def __init__(self, candidates: list[tuple[str, str]], shared_key: str = "",
-                 timeout: float = 30.0, resolve: Callable[..., dict[str, Any]] | None = None) -> None:
-        if not candidates:
-            raise ValueError("at least one hub candidate is required")
-        super().__init__(candidates[0][0], shared_key, timeout)
-        self.candidates = candidates
+                 timeout: float = 30.0, resolve: Callable[..., dict[str, Any]] | None = None,
+                 refresh: Callable[[], list[tuple[str, str]]] | None = None) -> None:
+        super().__init__(candidates[0][0] if candidates else "", shared_key, timeout)
+        self.candidates = list(candidates)
         self._resolve = resolve
+        self._refresh = refresh
+        self._live = refresh is not None  # re-read config until a hub first answers
         self.selected: str | None = None
         self.last_tried: list[dict[str, Any]] = []
 
     @property
-    def primary(self) -> str:
-        return self.candidates[0][0].rstrip("/")
+    def primary(self) -> str | None:
+        return self.candidates[0][0].rstrip("/") if self.candidates else None
 
     def health(self) -> bool:
+        if self._live and self._refresh is not None:
+            try:
+                self.candidates = list(self._refresh())
+            except Exception as exc:  # noqa: BLE001 - a bad config must not stop spooling
+                print(f"[watcher] hub settings unreadable, still spooling: {exc}", file=sys.stderr, flush=True)
+            if self.candidates:
+                self.base_url = self.candidates[0][0].rstrip("/")
+        if not self.candidates:  # no hub configured yet: stay offline, keep spooling
+            self.selected = None
+            self.last_tried = []
+            return False
         if self._resolve is None:
             ok = super().health()
             self.selected = self.base_url if ok else None
             return ok
-        result = self._resolve(self.candidates, key=self.shared_key, use_cache=False)
+        try:
+            result = self._resolve(self.candidates, key=self.shared_key, use_cache=False)
+        except Exception as exc:  # noqa: BLE001 - treat as unreachable; keep spooling
+            print(f"[watcher] hub probe failed, still spooling: {exc}", file=sys.stderr, flush=True)
+            self.selected = None
+            return False
         self.last_tried = result.get("tried") or []
         selected = result.get("selected")
         selected = selected.rstrip("/") if selected else None
@@ -78,5 +99,6 @@ class ResolvingHubClient(HubClient):
         self.selected = selected
         if selected:
             self.base_url = selected
+            self._live = False
             return True
         return False

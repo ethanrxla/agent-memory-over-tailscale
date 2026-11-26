@@ -331,7 +331,7 @@ def related_projects(
     Two passes, because they fail in different places. Lexical catches
     parent/child paths on one machine. Semantic catches the case lexical cannot
     see at all -- the same project on another device, where the keys share no
-    substring (a plugin built under ``C:\\Users\\theif`` is invisible from a
+    substring (a plugin built under ``C:\\Users\\me`` is invisible from a
     ``/Volumes/Drive/Thing-build`` checkout) and only meaning connects them.
     """
     from .retrieval import search as run_search  # local: retrieval imports this module
